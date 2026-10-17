@@ -10,10 +10,10 @@
       "name": "Steam 国区",
       "status": "ok",
       "checkedAt": "2026-10-17T13:37:15Z",
-      "validCount": 21,
-      "totalCount": 22,
-      "checkedCount": 17,
-      "message": "已采集目录共 22 款，21 款有正常报价记录（含旧快照）；本轮检查 17 款，各报价更新时间独立保留"
+      "validCount": 22,
+      "totalCount": 23,
+      "checkedCount": 18,
+      "message": "已采集目录共 23 款，22 款有正常报价记录（含旧快照）；本轮检查 18 款，各报价更新时间独立保留"
     },
     {
       "id": "sonkwo",
@@ -21,9 +21,9 @@
       "status": "ok",
       "checkedAt": "2026-10-17T13:37:15Z",
       "validCount": 5,
-      "totalCount": 22,
-      "checkedCount": 17,
-      "message": "已采集目录共 22 款，5 款有正常报价记录（含旧快照）；本轮检查 17 款，各报价更新时间独立保留"
+      "totalCount": 23,
+      "checkedCount": 18,
+      "message": "已采集目录共 23 款，5 款有正常报价记录（含旧快照）；本轮检查 18 款，各报价更新时间独立保留"
     },
     {
       "id": "steampy",
@@ -31,9 +31,9 @@
       "status": "ok",
       "checkedAt": "2026-10-17T13:37:15Z",
       "validCount": 10,
-      "totalCount": 22,
-      "checkedCount": 17,
-      "message": "已采集目录共 22 款，10 款有正常报价记录（含旧快照）；本轮检查 17 款，各报价更新时间独立保留；公开 CDK 参考价，实际卖单需登录，异常价已隐藏"
+      "totalCount": 23,
+      "checkedCount": 18,
+      "message": "已采集目录共 23 款，10 款有正常报价记录（含旧快照）；本轮检查 18 款，各报价更新时间独立保留；公开 CDK 参考价，实际卖单需登录，异常价已隐藏"
     },
     {
       "id": "steamcici",
@@ -41,9 +41,9 @@
       "status": "ok",
       "checkedAt": "2026-10-17T13:37:15Z",
       "validCount": 11,
-      "totalCount": 22,
-      "checkedCount": 17,
-      "message": "已采集目录共 22 款，11 款有正常报价记录（含旧快照）；本轮检查 17 款，各报价更新时间独立保留；平台低价参考，库存及可成交价未确认"
+      "totalCount": 23,
+      "checkedCount": 18,
+      "message": "已采集目录共 23 款，11 款有正常报价记录（含旧快照）；本轮检查 18 款，各报价更新时间独立保留；平台低价参考，库存及可成交价未确认"
     }
   ],
   "games": [
@@ -14800,11 +14800,500 @@
         "pyFailedCount": 0
       },
       "catalogOrigin": "steam_directory"
+    },
+    {
+      "appid": 300,
+      "name": "Day of Defeat: Source",
+      "nameEn": "Day of Defeat: Source",
+      "aliases": [],
+      "edition": "标准版",
+      "image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/300/header.jpg?t=1763407002",
+      "genres": [],
+      "steamUrl": "https://store.steampowered.com/app/300/?cc=cn&l=schinese",
+      "steamdbUrl": "https://steamdb.info/app/300/",
+      "quotes": [
+        {
+          "source": "steam",
+          "kind": "direct",
+          "price": 35.0,
+          "originalPrice": 35.0,
+          "currency": "CNY",
+          "discount": 0,
+          "url": "https://store.steampowered.com/app/300/?cc=cn&l=schinese",
+          "checkedAt": "2026-10-17T12:16:55Z",
+          "status": "ok",
+          "stock": "in_stock",
+          "eligible": true,
+          "note": "Steam 国区标准版当前直售价；不含钱包折扣或代购。"
+        },
+        {
+          "source": "sonkwo",
+          "kind": "cdk",
+          "price": null,
+          "originalPrice": null,
+          "currency": "CNY",
+          "discount": null,
+          "url": "https://www.sonkwo.cn/",
+          "checkedAt": "2026-10-17T12:16:55Z",
+          "status": "unavailable",
+          "stock": "unknown",
+          "eligible": false,
+          "note": "尚无已核验的国区 Steam 标准版 SKU 映射；不采用模糊搜索最低价。"
+        },
+        {
+          "source": "steampy",
+          "kind": "cdk",
+          "price": null,
+          "originalPrice": 35.0,
+          "currency": "CNY",
+          "discount": null,
+          "url": "https://steampy.com/cdkDetail?name=cn&gameId=272149440322605056",
+          "checkedAt": "2026-10-17T12:16:56Z",
+          "status": "unavailable",
+          "stock": "unknown",
+          "eligible": false,
+          "note": "未返回有效 CDKey 报价；未使用余额购或代购价。",
+          "reasonCode": "no_valid_cdk_price",
+          "reason": "未返回有效 CDKey 报价；未使用余额购或代购价。",
+          "sourceUrl": "https://steampy.com/xboot/common/plugIn/getGame?subId=25&appId=300&type=subid",
+          "lastCheckedAt": "2026-10-17T12:16:56Z",
+          "priceKind": "reference",
+          "editionSubId": 25,
+          "matchMethod": "requested_subid",
+          "editionName": "所选版本"
+        },
+        {
+          "source": "steamcici",
+          "kind": "cdk",
+          "price": null,
+          "originalPrice": null,
+          "currency": "CNY",
+          "discount": null,
+          "url": "https://steamcici.com/",
+          "checkedAt": "2026-10-17T12:16:57Z",
+          "status": "unavailable",
+          "stock": "unknown",
+          "eligible": false,
+          "note": "搜索结果中没有同时匹配 AppID 和标准版 SubID 的商品。"
+        }
+      ],
+      "history": [
+        {
+          "date": "2026-10-17",
+          "steam": 35.0,
+          "cdk": null
+        }
+      ],
+      "steamHistory": {
+        "source": "heybox",
+        "sourceName": "小黑盒",
+        "country": "CN",
+        "currency": "CNY",
+        "fetchedAt": "2026-10-17T12:16:57Z",
+        "status": "ok",
+        "scope": "recorded",
+        "points": [
+          {
+            "date": "2021-02-27",
+            "price": 37.0
+          },
+          {
+            "date": "2021-06-25",
+            "price": 7.0
+          },
+          {
+            "date": "2021-07-10",
+            "price": 37.0
+          },
+          {
+            "date": "2021-07-22",
+            "price": 7.0
+          },
+          {
+            "date": "2021-07-23",
+            "price": 37.0
+          },
+          {
+            "date": "2021-11-25",
+            "price": 7.4
+          },
+          {
+            "date": "2021-12-03",
+            "price": 37.0
+          },
+          {
+            "date": "2021-12-23",
+            "price": 7.4
+          },
+          {
+            "date": "2022-01-07",
+            "price": 37.0
+          },
+          {
+            "date": "2022-01-28",
+            "price": 7.4
+          },
+          {
+            "date": "2022-02-05",
+            "price": 37.0
+          },
+          {
+            "date": "2022-06-24",
+            "price": 7.4
+          },
+          {
+            "date": "2022-07-09",
+            "price": 37.0
+          },
+          {
+            "date": "2022-10-26",
+            "price": 42.0
+          },
+          {
+            "date": "2022-11-23",
+            "price": 4.2
+          },
+          {
+            "date": "2022-12-01",
+            "price": 42.0
+          },
+          {
+            "date": "2022-12-23",
+            "price": 4.2
+          },
+          {
+            "date": "2023-01-07",
+            "price": 42.0
+          },
+          {
+            "date": "2023-03-17",
+            "price": 4.2
+          },
+          {
+            "date": "2023-03-25",
+            "price": 42.0
+          },
+          {
+            "date": "2023-06-30",
+            "price": 4.2
+          },
+          {
+            "date": "2023-07-15",
+            "price": 42.0
+          },
+          {
+            "date": "2023-09-13",
+            "price": 4.2
+          },
+          {
+            "date": "2023-09-20",
+            "price": 42.0
+          },
+          {
+            "date": "2023-11-22",
+            "price": 4.2
+          },
+          {
+            "date": "2023-11-29",
+            "price": 42.0
+          },
+          {
+            "date": "2023-12-22",
+            "price": 4.2
+          },
+          {
+            "date": "2024-01-05",
+            "price": 42.0
+          },
+          {
+            "date": "2024-03-01",
+            "price": 21.0
+          },
+          {
+            "date": "2024-03-08",
+            "price": 42.0
+          },
+          {
+            "date": "2024-03-15",
+            "price": 4.2
+          },
+          {
+            "date": "2024-03-22",
+            "price": 42.0
+          },
+          {
+            "date": "2024-06-28",
+            "price": 6.3
+          },
+          {
+            "date": "2024-07-12",
+            "price": 42.0
+          },
+          {
+            "date": "2024-11-28",
+            "price": 8.4
+          },
+          {
+            "date": "2024-12-05",
+            "price": 42.0
+          },
+          {
+            "date": "2024-12-20",
+            "price": 8.4
+          },
+          {
+            "date": "2025-01-03",
+            "price": 42.0
+          },
+          {
+            "date": "2025-03-14",
+            "price": 8.4
+          },
+          {
+            "date": "2025-03-21",
+            "price": 42.0
+          },
+          {
+            "date": "2025-06-27",
+            "price": 8.4
+          },
+          {
+            "date": "2025-07-11",
+            "price": 42.0
+          },
+          {
+            "date": "2025-09-30",
+            "price": 8.4
+          },
+          {
+            "date": "2025-10-07",
+            "price": 42.0
+          },
+          {
+            "date": "2025-12-19",
+            "price": 8.4
+          },
+          {
+            "date": "2026-01-06",
+            "price": 42.0
+          },
+          {
+            "date": "2026-03-20",
+            "price": 8.4
+          },
+          {
+            "date": "2026-03-27",
+            "price": 42.0
+          },
+          {
+            "date": "2026-06-26",
+            "price": 8.4
+          },
+          {
+            "date": "2026-07-10",
+            "price": 42.0
+          },
+          {
+            "date": "2026-10-02",
+            "price": 8.4
+          },
+          {
+            "date": "2026-10-09",
+            "price": 35.0
+          },
+          {
+            "date": "2026-10-17",
+            "price": 35.0
+          }
+        ],
+        "note": "小黑盒收录的 Steam 国区人民币历史变价记录；覆盖范围以返回记录为准，不保证自发售起完整。同日多次变价保留最后一次。",
+        "sourceUrl": "https://www.xiaoheihe.cn/app/topic/game/pc/300",
+        "coverageStart": "2021-02-27",
+        "coverageEnd": "2026-10-17"
+      },
+      "editions": [
+        {
+          "id": "sub-25",
+          "kind": "package",
+          "appid": 300,
+          "subid": 25,
+          "name": "Day of Defeat: Source",
+          "isStandard": true,
+          "steamUrl": "https://store.steampowered.com/sub/25/?cc=cn&l=schinese",
+          "includedAppids": [
+            300
+          ],
+          "metadataCheckedAt": "2026-10-17T12:16:58Z",
+          "nameZh": "Day of Defeat: Source · 标准版",
+          "quotes": [
+            {
+              "source": "steam",
+              "kind": "direct",
+              "price": 35.0,
+              "originalPrice": 35.0,
+              "currency": "CNY",
+              "discount": 0,
+              "url": "https://store.steampowered.com/app/300/?cc=cn&l=schinese",
+              "checkedAt": "2026-10-17T12:16:55Z",
+              "status": "ok",
+              "stock": "in_stock",
+              "eligible": true,
+              "note": "Steam 国区标准版当前直售价；不含钱包折扣或代购。"
+            },
+            {
+              "source": "sonkwo",
+              "kind": "cdk",
+              "price": null,
+              "originalPrice": null,
+              "currency": "CNY",
+              "discount": null,
+              "url": "https://www.sonkwo.cn/",
+              "checkedAt": "2026-10-17T12:16:55Z",
+              "status": "unavailable",
+              "stock": "unknown",
+              "eligible": false,
+              "note": "尚无已核验的国区 Steam 标准版 SKU 映射；不采用模糊搜索最低价。"
+            },
+            {
+              "source": "steampy",
+              "kind": "cdk",
+              "price": null,
+              "originalPrice": 35.0,
+              "currency": "CNY",
+              "discount": null,
+              "url": "https://steampy.com/cdkDetail?name=cn&gameId=272149440322605056",
+              "checkedAt": "2026-10-17T12:16:56Z",
+              "status": "unavailable",
+              "stock": "unknown",
+              "eligible": false,
+              "note": "未返回有效 CDKey 报价；未使用余额购或代购价。",
+              "reasonCode": "no_valid_cdk_price",
+              "reason": "未返回有效 CDKey 报价；未使用余额购或代购价。",
+              "sourceUrl": "https://steampy.com/xboot/common/plugIn/getGame?subId=25&appId=300&type=subid",
+              "lastCheckedAt": "2026-10-17T12:16:56Z",
+              "priceKind": "reference",
+              "editionSubId": 25,
+              "matchMethod": "requested_subid",
+              "editionName": "所选版本"
+            },
+            {
+              "source": "steamcici",
+              "kind": "cdk",
+              "price": null,
+              "originalPrice": null,
+              "currency": "CNY",
+              "discount": null,
+              "url": "https://steamcici.com/",
+              "checkedAt": "2026-10-17T12:16:57Z",
+              "status": "unavailable",
+              "stock": "unknown",
+              "eligible": false,
+              "note": "搜索结果中没有同时匹配 AppID 和标准版 SubID 的商品。"
+            }
+          ]
+        },
+        {
+          "id": "bundle-240",
+          "kind": "bundle",
+          "appid": 300,
+          "bundleid": 240,
+          "name": "Source Multiplayer Pack\t\t\t\t\t\t\t\n\t\t\t\t\t捆绑包\t\t\t\t\t(?)",
+          "nameZh": "Source Multiplayer Pack\t\t\t\t\t\t\t\n\t\t\t\t\t捆绑包\t\t\t\t\t(?)",
+          "isStandard": false,
+          "includedAppids": [
+            240,
+            300
+          ],
+          "steamUrl": "https://store.steampowered.com/bundle/240/?cc=cn&l=schinese",
+          "note": "Steam 国区捆绑包整体参考价；不是单独豪华版或升级 DLC。 已拥有部分内容时，登录后的补齐价格可能不同。",
+          "quotes": [
+            {
+              "source": "steam",
+              "kind": "direct",
+              "price": 59.5,
+              "originalPrice": null,
+              "currency": "CNY",
+              "discount": null,
+              "url": "https://store.steampowered.com/bundle/240/?cc=cn&l=schinese",
+              "checkedAt": "2026-10-17T12:16:59Z",
+              "status": "ok",
+              "stock": "in_stock",
+              "eligible": true,
+              "note": "Steam 国区捆绑包整体参考价；不是单独豪华版或升级 DLC。 已拥有部分内容时，登录后的补齐价格可能不同。"
+            }
+          ]
+        },
+        {
+          "id": "bundle-232",
+          "kind": "bundle",
+          "appid": 300,
+          "bundleid": 232,
+          "name": "Valve Complete Pack\t\t\t\t\t\t\t\n\t\t\t\t\t捆绑包\t\t\t\t\t(?)",
+          "nameZh": "Valve Complete Pack\t\t\t\t\t\t\t\n\t\t\t\t\t捆绑包\t\t\t\t\t(?)",
+          "isStandard": false,
+          "includedAppids": [
+            10,
+            20,
+            30,
+            40,
+            50,
+            60,
+            70,
+            80,
+            130,
+            220,
+            240,
+            280,
+            300,
+            360,
+            400,
+            500,
+            550,
+            620
+          ],
+          "steamUrl": "https://store.steampowered.com/bundle/232/?cc=cn&l=schinese",
+          "note": "Steam 国区捆绑包整体参考价；不是单独豪华版或升级 DLC。 已拥有部分内容时，登录后的补齐价格可能不同。",
+          "quotes": [
+            {
+              "source": "steam",
+              "kind": "direct",
+              "price": 417.6,
+              "originalPrice": null,
+              "currency": "CNY",
+              "discount": null,
+              "url": "https://store.steampowered.com/bundle/232/?cc=cn&l=schinese",
+              "checkedAt": "2026-10-17T12:16:59Z",
+              "status": "ok",
+              "stock": "in_stock",
+              "eligible": true,
+              "note": "Steam 国区捆绑包整体参考价；不是单独豪华版或升级 DLC。 已拥有部分内容时，登录后的补齐价格可能不同。"
+            }
+          ]
+        }
+      ],
+      "dlc": [],
+      "contentStatus": {
+        "editions": "ok",
+        "dlc": "ok",
+        "checkedAt": "2026-10-17T12:16:58Z",
+        "editionCount": 3,
+        "dlcCount": 0,
+        "dlcMetadataComplete": 0,
+        "dlcMetadataPending": 0,
+        "dlcMetadataFetched": 0,
+        "dlcMetadataBatchLimit": 30,
+        "note": "版本与 DLC 按 Steam 公开国区购买选项区分；捆绑包另行标注，缺失报价不填估算值。",
+        "pyBatchLimit": 30,
+        "pyCheckedCount": 0,
+        "pyPendingCount": 0,
+        "pyFailedCount": 0
+      },
+      "catalogOrigin": "steam_directory"
     }
   ],
   "rotation": {
     "scheduledAt": "2026-10-17T13:37:15Z",
-    "checkedCount": 17,
+    "checkedCount": 18,
     "coreCount": 14,
     "batchCount": 3,
     "newCount": 2,
@@ -14830,8 +15319,8 @@
       10
     ],
     "catalogCount": 7972,
-    "collectedCount": 22,
-    "returnedCount": 17,
+    "collectedCount": 23,
+    "returnedCount": 18,
     "lastAttempts": {
       "2358720": "2026-10-17T13:37:15Z",
       "990080": "2026-10-17T13:37:15Z",
@@ -14857,6 +15346,6 @@
       "30": "2026-10-17T13:37:15Z"
     },
     "status": "ok",
-    "kind": "rotation"
+    "kind": "merged"
   }
 }
