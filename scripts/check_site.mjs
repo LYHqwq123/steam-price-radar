@@ -185,6 +185,36 @@ for (const game of index.games) {
 for (const appid of appids) assert.ok(indexedIds.has(appid), `priced game ${appid} must also be searchable in the index`);
 if (index.complete === false) assert.notEqual(index.status, 'complete', 'a partial directory must not be labelled complete');
 
+const directPath = resolve(dist, 'data/direct-prices.json');
+assert.ok(existsSync(directPath), 'batch Steam current prices are missing');
+const direct = JSON.parse(readFileSync(directPath, 'utf8'));
+assert.equal(direct.schemaVersion, 1, 'unsupported direct price schema');
+assert.equal(direct.source, 'steam');
+assert.equal(direct.country, 'CN');
+assert.equal(direct.currency, 'CNY');
+date(direct.generatedAt, 'direct.generatedAt');
+assert.ok(['ok', 'partial', 'stale', 'error'].includes(direct.status));
+assert.ok(Array.isArray(direct.games), 'batch prices must contain game records');
+assert.equal(direct.gameCount, direct.games.length);
+const directIds = new Set();
+let directPricedCount = 0;
+for (const row of direct.games) {
+  const label = `Steam batch ${row.appid}`;
+  assert.ok(Number.isInteger(row.appid) && indexedIds.has(row.appid) && !directIds.has(row.appid), `${label}: invalid or duplicate AppID`);
+  directIds.add(row.appid);
+  assert.ok(['ok', 'unavailable', 'stale', 'error'].includes(row.status), `${label}: unsupported status`);
+  money(row.price, `${label}.price`);
+  money(row.originalPrice, `${label}.originalPrice`);
+  assert.ok(row.discount === null || (Number.isFinite(row.discount) && row.discount >= 0 && row.discount <= 100), `${label}: invalid discount`);
+  if (row.checkedAt != null) date(row.checkedAt, `${label}.checkedAt`);
+  if (row.status === 'ok') {
+    assert.notEqual(row.price, null, `${label}: a valid price cannot be missing`);
+    date(row.checkedAt, `${label}.checkedAt`);
+    directPricedCount += 1;
+  }
+}
+assert.equal(direct.pricedCount, directPricedCount, 'batch price coverage count must reflect actual successful amounts');
+
 function filesBelow(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const path = resolve(directory, entry.name);

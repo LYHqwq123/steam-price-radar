@@ -5,6 +5,11 @@ on:
     # UTC: offset from the start of the hour to reduce peak-time queueing.
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
+    inputs:
+      appids:
+        description: '优先采集指定 Steam AppID（最多 10 个，逗号或空格分隔）；留空执行常规更新'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,14 +39,23 @@ jobs:
       - name: Verify price matching safeguards
         run: python -m unittest discover -s tests -v
       - name: Collect current prices
-        run: python scripts/refresh_prices.py --batch-size 3
+        env:
+          REQUESTED_APPIDS: ${{ inputs.appids || '' }}
+        run: |
+          if [ -n "$REQUESTED_APPIDS" ]; then
+            python scripts/refresh_prices.py --appids "$REQUESTED_APPIDS"
+          else
+            python scripts/refresh_prices.py --batch-size 3
+          fi
+      - name: Collect Steam current prices across the directory
+        run: python scripts/direct_prices.py --max-batches 80 --delay 0.7
       - name: Validate prices and website
         run: node scripts/check_site.mjs
       - name: Save changed prices
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add -- dist/data/prices.json
+          git add -- dist/data/prices.json dist/data/direct-prices.json
           if git diff --cached --quiet; then
             echo 'No price data changed.'
           else

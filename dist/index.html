@@ -29,11 +29,12 @@
 
     <section class="overview-bar" aria-label="数据概况">
       <div class="overview-item"><span class="stat-icon mint" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h4"/></svg></span><div><span class="stat-value" id="game-count">—</span><span class="stat-label" id="catalog-coverage">可搜索游戏目录</span></div></div>
-      <div class="overview-item"><span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 21h8M12 18v3"/></svg></span><div><span class="stat-value">Steam 国区</span><span class="stat-label">官方商店直售</span></div></div>
-      <div class="overview-item"><span class="stat-icon violet" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h9l6 6-10 10-6-6V5z"/><circle cx="9" cy="9" r="1"/></svg></span><div><span class="stat-value">3 家 CDK 平台</span><span class="stat-label">杉果 / SteamPY / SteamCici</span></div></div>
+      <div class="overview-item"><span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 21h8M12 18v3"/></svg></span><div><span class="stat-value" id="direct-price-count">—</span><span class="stat-label">Steam 国区现价</span></div></div>
+      <div class="overview-item"><span class="stat-icon violet" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h9l6 6-10 10-6-6V5z"/><circle cx="9" cy="9" r="1"/></svg></span><div><span class="stat-value"><span id="complete-price-count">—</span> 款详情已采集</span><span class="stat-label">版本 / DLC / 历史与 CDK</span></div></div>
       <div class="snapshot-status"><span class="status-dot" id="snapshot-dot"></span><div><span id="snapshot-label">正在读取价格快照</span><small id="snapshot-time">计划每 15 分钟更新</small></div><button class="icon-button" id="refresh-button" type="button" aria-label="重新读取已发布价格快照" title="重新读取快照，不会即时查询各平台"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg></button></div>
     </section>
 
+    <p class="direct-price-status" id="direct-price-time" role="status">正在读取 Steam 基础现价…</p>
     <section class="workspace" id="games" aria-label="游戏比价">
       <div class="catalog-panel">
         <div class="catalog-heading"><h2 id="catalog-title">发现下一款好游戏<span id="visible-count"></span></h2><div class="list-tools"><button type="button" class="icon-button" id="export-button" title="导出关注清单" aria-label="导出关注 AppID 清单"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg></button><button type="button" class="icon-button" id="import-button" title="导入关注清单" aria-label="导入关注 AppID 清单"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 16v4h14v-4"/></svg></button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>

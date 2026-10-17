@@ -24,14 +24,15 @@ python scripts/serve.py --open
 | --- | --- |
 | 搜索目录 | 每天同步一批 Steam 国区公开搜索可见的游戏本体，保存分页游标，下次接续；不含受限条目、DLC、软件和捆绑包 |
 | 完整度 | `catalog-index.json` 用 `status`、`complete`、`scope` 和说明标注实际覆盖范围；`partial` 表示尚在补全，不等于 Steam 全库 |
-| 核心游戏现价 | `data/catalog.json` 当前配置 13 款核心游戏，计划每 15 分钟刷新 |
-| 目录游戏现价 | 每轮额外选取 3 款目录游戏采价并保留旧结果，逐步回填；不同游戏更新时间不同，不保证每款都在 15 分钟内更新 |
+| 目录基础现价 | `direct_prices.py` 按每批 100 个 AppID 采集 Steam 国区现价，每轮最多 80 批；支持游标接续与网络失败重试，现价不再受完整资料每轮 3 款的配额限制 |
+| 核心游戏详情 | `data/catalog.json` 中的核心与优先游戏计划每 15 分钟刷新完整报价，包含超级鸡马 |
+| 其他游戏详情 | 每轮额外选取 3 款；同时为未采游戏和已采旧游戏保留配额，逐步补齐版本、DLC、CDK 和历史；不同游戏更新时间不同 |
 | 版本与 DLC | 按精确购买包或 AppID 采集独立价格；每款游戏每轮最多补取 30 项待核验 DLC 资料，其余继续排队 |
 | Steam 历史 | 小黑盒国区人民币记录缓存 24 小时，避免每轮重复请求；不与 CDK 历史混用 |
 
 匿名公开目录同步无需密钥。配置 **`STEAM_WEB_API_KEY`** 后，目录脚本改用官方 `IStoreService/GetAppList`：首次分页全量同步，完成后按修改时间增量更新。这里的全量指官方商店接口返回的游戏本体，仍不代表所有已下架、受限或非游戏应用。密钥只在采集进程中使用，不写入网页、目录 JSON 或日志。
 
-未采价的目录游戏显示“尚未采集价格”，并提供 Steam 商店入口；不会用估算价格或模拟曲线填充。API 或某页失败时保留已有数据及检查时间，不跳过失败页，也不将失败标成同步完成。
+目录游戏已有基础现价时直接显示价格卡，版本、DLC、CDK 和历史尚未取得会分别注明。没有可读的本站现价时，直接嵌入 Steam 官方价格组件并保留商店入口；组件的跨域内容不读入本站排序或最低价计算。空的 `price_overview` 不能据此判为免费。失败时保留已有报价与原检查时间并标记过期，不填估算价格或模拟曲线。
 
 ## 价格与版本怎么比较
 
@@ -65,6 +66,12 @@ python scripts/sync_catalog.py --pages 30
 # 核心游戏 + 3 款目录游戏逐步采价
 python scripts/refresh_prices.py --batch-size 3
 
+# 批量更新已同步目录的 Steam 基础现价
+python scripts/direct_prices.py --max-batches 80
+
+# 优先补齐指定游戏的版本、DLC、CDK 与历史，只处理这些游戏
+python scripts/refresh_prices.py --appids "386940,620"
+
 # 按需强制刷新历史或版本资料
 python scripts/refresh_prices.py --batch-size 3 --refresh-history --refresh-content
 
@@ -85,7 +92,7 @@ python scripts/package_preview.py
 | 工作流文件 / 名称 | 作用 |
 | --- | --- |
 | `pages.yml` / Deploy GitHub Pages | 页面代码变动后的检查与发布 |
-| `refresh-prices.yml` / Refresh prices and deploy | 每小时第 7、22、37、52 分钟执行 `refresh_prices.py --batch-size 3`，提交更新并直接部署 |
+| `refresh-prices.yml` / Refresh prices and deploy | 每小时第 7、22、37、52 分钟更新完整报价及最多 80 批基础现价，再直接部署；手动运行可填写 `appids` 优先采集最多 10 款已在目录中的游戏 |
 | `sync-catalog.yml` / Sync game catalog and deploy | 每天 UTC 19:19，即北京时间次日 03:19，执行下一批目录同步，再提交并部署；支持手动运行 |
 
 可选官方目录密钥在 **Settings → Secrets and variables → Actions → New repository secret** 中添加，名称为 **`STEAM_WEB_API_KEY`**。不配置时走匿名公开搜索；其他常规匿名采集不依赖这项密钥。
@@ -101,10 +108,12 @@ python scripts/package_preview.py
 | `dist/` | 发布到 Pages 的静态网页、明暗样式、脚本与 JSON |
 | `dist/data/catalog-index.json` | 自动同步的独立搜索目录、覆盖状态与分页游标 |
 | `dist/data/prices.json` | 已采价游戏、独立版本 / DLC 报价、历史及轮转进度 |
+| `dist/data/direct-prices.json` | 独立的 Steam 国区基础现价、覆盖状态、各记录时间与续采游标 |
 | `打开预览.html` / `启动预览.cmd` | 可双击的独立快照及启动入口 |
 | `data/catalog.json` | 核心游戏中文名称、别名和已核验的商品映射 |
 | `scripts/sync_catalog.py` | 公开搜索分页、可选官方目录全量 / 增量同步 |
 | `scripts/refresh_prices.py` | 核心游戏刷新与目录游戏轮转回填 |
+| `scripts/direct_prices.py` | 每批最多 100 个 AppID 的 Steam 基础现价采集、失败保留及断点接续 |
 | `scripts/collect_prices.py` / `providers.py` | 商家采集、标准版匹配、报价归一化与异常处理 |
 | `scripts/editions.py` | 精确购买包、捆绑包、DLC 资料与独立报价 |
 | `scripts/price_history.py` | 小黑盒国区历史、日期归一化与缓存 |

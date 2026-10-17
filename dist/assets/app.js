@@ -24,7 +24,7 @@
     sun: ['M12 3v2', 'M12 19v2', 'M3 12h2', 'M19 12h2', 'm5.6 5.6 1.4 1.4', 'm17 17 1.4 1.4', 'm5.6 18.4 1.4-1.4', 'm17 7 1.4-1.4'],
     moon: ['M20 14a8.5 8.5 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z']
   };
-  const state = { data: null, catalog: null, catalogEntries: [], catalogStatus: 'loading', query: '', provider: 'all', sort: 'recommended', favorites: readFavorites(), favoritesOnly: false, selected: null, loading: false, catalogLoading: false, visibleLimit: PAGE_SIZE, searchTimer: null, toastTimer: null, dialogReturn: null, expirySignature: '', historyRanges: new Map(), historyReturn: null, contentSelections: new Map(), contentListOpen: new Map() };
+  const state = { data: null, directData: null, directEntries: new Map(), directStatus: 'loading', directLoading: false, catalog: null, catalogEntries: [], catalogStatus: 'loading', query: '', provider: 'all', sort: 'recommended', favorites: readFavorites(), favoritesOnly: false, selected: null, loading: false, catalogLoading: false, visibleLimit: PAGE_SIZE, searchTimer: null, toastTimer: null, dialogReturn: null, expirySignature: '', historyRanges: new Map(), historyReturn: null, contentSelections: new Map(), contentListOpen: new Map() };
   const $ = (id) => document.getElementById(id);
 
   function node(tag, className, value) {
@@ -146,28 +146,78 @@
   }
   function imageElement(url, alt, className, fallbackClass) {
     const source = safeUrl(url);
-    const fallback = () => node('span', fallbackClass || 'thumbnail-fallback', 'GAME');
+    const fallback = () => { const placeholder = node('span', fallbackClass || 'thumbnail-fallback'); placeholder.setAttribute('aria-hidden', 'true'); placeholder.append(icon('store')); if (fallbackClass === 'cover-fallback') placeholder.append(node('span', 'cover-fallback-label', 'Steam 游戏')); return placeholder; };
     if (!source) return fallback();
     const img = node('img', className); img.src = source; img.alt = alt; img.loading = 'lazy'; img.decoding = 'async';
     img.addEventListener('error', () => img.replaceWith(fallback()), { once: true });
     return img;
   }
   function currentGames() {
-    const priced = state.data ? state.data.games : [];
+    const priced = state.data ? state.data.games.map((game) => mergeDirectPrice(game, state.directEntries.get(Number(game.appid)))) : [];
     const ids = new Set(priced.map((game) => Number(game.appid)));
     const options = { favorites: state.favorites, favoritesOnly: state.favoritesOnly };
     const games = filterGames(priced, state.query, options);
-    // The landing page stays focused on collected prices; search and favorites
-    // also include the independently synchronized Steam directory.
-    if (normalizeQuery(state.query) || state.favoritesOnly || !priced.length) {
-      const term = normalizeQuery(state.query);
-      state.catalogEntries.forEach((game) => {
-        if (ids.has(game.appid) || (state.favoritesOnly && !state.favorites.has(game.appid))) return;
-        if (!term || String(game.appid) === term || game.searchText.includes(term)) games.push(game);
-      });
-    }
+    // Keep fully collected games first by default, then show basic Steam prices.
+    // Search also includes directory entries without a readable price snapshot.
+    const term = normalizeQuery(state.query);
+    state.catalogEntries.forEach((entry) => {
+      if (ids.has(entry.appid) || (state.favoritesOnly && !state.favorites.has(entry.appid))) return;
+      const game = mergeDirectPrice(entry, state.directEntries.get(entry.appid));
+      if (!term && !state.favoritesOnly && priced.length && !getSteamQuote(game)) return;
+      if (!term || String(game.appid) === term || game.searchText.includes(term)) games.push(game);
+    });
     return sortGames(games, state.sort, state.provider);
   }
+  function validateDirectData(data) {
+    if (!data || data.schemaVersion !== 1 || data.source !== 'steam' || data.country !== 'CN' || data.currency !== 'CNY' || !Array.isArray(data.games)) throw new Error('Steam 基础价格快照格式不正确');
+    const seen = new Set();
+    const games = data.games.filter((entry) => {
+      if (!entry || !validAppId(entry.appid) || seen.has(Number(entry.appid))) return false;
+      seen.add(Number(entry.appid)); return true;
+    }).map((entry) => ({ ...entry, appid: Number(entry.appid), price: isPrice(entry.price) ? entry.price : null, originalPrice: isPrice(entry.originalPrice) ? entry.originalPrice : null, status: ['ok', 'unavailable', 'stale', 'error'].includes(entry.status) && (entry.status !== 'ok' || (isPrice(entry.price) && typeof entry.checkedAt === 'string' && Number.isFinite(Date.parse(entry.checkedAt)))) ? entry.status : 'unavailable' }));
+    return { ...data, games };
+  }
+  function directQuote(entry, appid) {
+    if (!entry || !validAppId(appid) || Number(entry.appid) !== Number(appid)) return null;
+    return { ...entry, source: 'steam', dataProvider: 'steam', kind: 'direct', currency: 'CNY', stock: entry.status === 'ok' && isPrice(entry.price) ? 'in_stock' : 'unknown', eligible: entry.status === 'ok' && isPrice(entry.price), url: `https://store.steampowered.com/app/${Number(appid)}/?cc=cn&l=schinese`, basicPrice: true };
+  }
+  function mergeDirectPrice(game, entry) {
+    const quote = directQuote(entry, game.appid);
+    if (!quote) return game;
+    const existing = (game.quotes || []).find((item) => item.source === 'steam' && item.kind === 'direct');
+    if (existing && isUsableQuote(existing) && existing.dataProvider !== 'heybox') return game;
+    // An independent batch may repair only the standard Steam quote; it must not
+    // remove versions, DLC, historical prices, or CDK provenance.
+    if (existing && (!isUsableQuote(quote) || (isPrice(existing.price) && dateValue(existing.checkedAt) && (!dateValue(quote.checkedAt) || dateValue(quote.checkedAt) <= dateValue(existing.checkedAt))))) return game;
+    return { ...game, quotes: [...(game.quotes || []).filter((item) => !(item.source === 'steam' && item.kind === 'direct')), quote] };
+  }
+  async function loadDirectPrices(manual) {
+    if (state.directLoading) return;
+    state.directLoading = true;
+    try {
+      let data;
+      if (window.location.protocol === 'file:' && window.__DIRECT_PRICE_DATA__) data = window.__DIRECT_PRICE_DATA__;
+      else {
+        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含基础现价');
+        const url = new URL('./data/direct-prices.json', window.location.href); if (manual) url.searchParams.set('t', String(Date.now()));
+        const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        data = await response.json();
+      }
+      state.directData = validateDirectData(data);
+      state.directEntries = new Map(state.directData.games.map((entry) => [entry.appid, entry]));
+      state.directStatus = ['error', 'stale', 'unavailable'].includes(data.status) ? 'stale' : 'ok';
+    } catch (_) { state.directStatus = state.directData ? 'stale' : 'unavailable'; }
+    finally { state.directLoading = false; if (state.data) { state.expirySignature = getExpirySignature(); renderOverview(); renderGameList(); } else renderCatalogStatus(); }
+  }
+  function coverageCounts() {
+    const all = new Map(state.catalogEntries.map((game) => [game.appid, game]));
+    if (state.data) state.data.games.forEach((game) => all.set(Number(game.appid), game));
+    let direct = 0;
+    all.forEach((game, appid) => { if (getSteamQuote(mergeDirectPrice(game, state.directEntries.get(appid)))) direct += 1; });
+    return { catalog: all.size, direct, complete: state.data ? state.data.games.length : 0 };
+  }
+  function steamWidgetUrl(appid) { return validAppId(appid) ? `https://store.steampowered.com/widget/${Number(appid)}/?cc=cn&l=schinese` : null; }
   function validateCatalog(data) {
     if (!data || data.schemaVersion !== 1 || !Array.isArray(data.games)) throw new Error('游戏目录格式不正确');
     const seen = new Set();
@@ -201,9 +251,11 @@
   }
   function renderCatalogStatus() {
     const count = state.catalogEntries.length;
-    const priced = state.data ? state.data.games.length : 0;
+    const coverage = coverageCounts();
     const status = $('catalog-status');
-    status.textContent = count ? `${count.toLocaleString('zh-CN')} 款目录游戏 · ${priced} 款已采价${state.catalogStatus === 'stale' ? ' · 目录缓存' : state.catalog && state.catalog.complete === false ? ' · 目录正在补全' : ''}。输入名称或 AppID 搜索已同步目录。` : state.catalogStatus === 'loading' ? '正在载入 Steam 游戏目录…' : `目前可搜索 ${priced} 款已采价游戏，同步目录暂不可用。`;
+    status.textContent = count ? `${coverage.catalog.toLocaleString('zh-CN')} 款目录 · ${coverage.direct.toLocaleString('zh-CN')} 款有有效 Steam 现价 · ${coverage.complete} 款已采集详情${state.catalogStatus === 'stale' ? ' · 目录缓存' : state.catalog && state.catalog.complete === false ? ' · 目录正在补全' : ''}。输入名称或 AppID 搜索。` : state.catalogStatus === 'loading' ? '正在载入 Steam 游戏目录…' : `目前可搜索 ${coverage.complete} 款详情已收录游戏，同步目录暂不可用。`;
+    if (state.directStatus === 'unavailable') status.textContent += ' 基础现价暂未载入，可打开游戏查看 Steam 官方价格组件。';
+    else if (state.directStatus === 'stale') status.textContent += ' 基础现价同步暂受影响；过期报价已排除。';
     if (state.catalog && state.catalog.generatedAt) status.title = `目录同步于 ${formatDate(state.catalog.generatedAt)}（北京时间）。目录收录不代表已经取得价格。`;
   }
   function renderNav() {
@@ -236,7 +288,7 @@
       const copy = node('span', 'game-copy');
       const name = node('span', 'game-name', game.name || game.nameEn || `App ${game.appid}`);
       if (state.favorites.has(Number(game.appid))) { const marker = node('span', 'favorite-marker', '★'); marker.setAttribute('aria-label', '已关注'); name.append(marker); }
-      copy.append(name, node('span', 'game-subtitle', game.nameEn || `Steam AppID ${game.appid}`), node('span', 'game-version', game.catalogOnly ? '目录收录 · 待采价' : game.edition || '标准版'));
+      copy.append(name, node('span', 'game-subtitle', game.nameEn || `Steam AppID ${game.appid}`), node('span', 'game-version', game.catalogOnly ? getSteamQuote(game) ? 'Steam 现价 · 详情待补全' : '目录收录 · 官方查价' : game.edition || '标准版'));
       info.append(copy); row.append(info);
       const steam = getSteamQuote(game); const cdk = getCdkQuote(game, state.provider);
       const directPrice = node('span', `row-price${steam ? '' : ' is-missing'}`);
@@ -550,6 +602,33 @@
     if (contentStatus && (typeof contentStatus === 'string' ? contentStatus !== 'ok' : [contentStatus.editions, contentStatus.dlc].some((status) => status && status !== 'ok'))) section.append(node('p', 'content-coverage-note', typeof contentStatus === 'object' && contentStatus.note ? contentStatus.note : '版本或 DLC 信息尚未完整取得，已获取的内容列在上方。'));
     return section;
   }
+  function createSteamWidget(game) {
+    const url = steamWidgetUrl(game.appid); const section = node('section', 'steam-widget-section');
+    section.append(node('h3', '', 'Steam 官方现价'), node('p', 'steam-widget-description', '下方由 Steam 官方商店直接显示价格和购买入口。组件内容不计入本站最低价或价格排序。'));
+    if (url) {
+      const viewport = node('div', 'steam-widget-viewport');
+      const frame = node('iframe', 'steam-price-widget'); frame.src = url; frame.title = `${game.name || game.nameEn || `App ${game.appid}`} · Steam 官方当前价格`; frame.loading = 'lazy'; frame.width = '646'; frame.height = '190'; frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      // The URL is built only from a validated numeric AppID on Steam's origin.
+      // This official cross-origin document is never read or scraped by this app.
+      viewport.append(frame); section.append(viewport);
+    }
+    section.append(node('p', 'steam-widget-network-note', '组件加载受网络、地区及 Steam 商店可用性影响。若未显示价格，请直接打开商店核对。'));
+    return section;
+  }
+  function renderBasicDetail(game, steam, content, steamUrl) {
+    if (steam) {
+      const cards = node('div', 'price-cards basic-price-cards'); cards.append(priceCard('Steam 国区本体现价', steam, 'direct')); content.append(cards);
+      const coverage = node('section', 'basic-coverage'); coverage.append(icon('info'), node('div', '', 'Steam 现价已采集，CDK / 版本 / DLC / 历史待补全。'));
+      content.append(coverage);
+    } else {
+      const notice = node('div', 'basic-coverage'); notice.append(icon('clock'), node('div', '', '本站价格正在分批补充，可先通过下方官方组件查看 Steam 现价。版本、DLC、CDK 和历史数据尚未采集。')); content.append(notice, createSteamWidget(game));
+      const previous = (game.quotes || []).find((quote) => quote.source === 'steam' && quote.kind === 'direct');
+      if (previous && previous.checkedAt) content.append(node('p', 'basic-checked-time', `最近检查 ${formatDate(previous.checkedAt)}（北京时间）· ${effectiveStatus(previous) === 'stale' ? '本站报价已过期，已从现价和排序中排除' : previous.note || '尚未取得有效的国区人民币现价'}`));
+    }
+    const pending = node('div', 'basic-pending-list');
+    ['版本资料待采集', 'DLC 资料待采集', '三家 CDK 报价待匹配', '历史价格待采集'].forEach((label) => pending.append(node('span', '', label)));
+    content.append(pending, externalLink('前往 Steam 查看价格与全部版本 ', steamUrl, 'button button-secondary basic-store-link'));
+  }
   function renderDetail(game) {
     const container = $('game-detail'); container.replaceChildren();
     if (!game) {
@@ -559,23 +638,23 @@
     const current = selectedContent(game);
     const steam = getSteamQuote(current); const cdk = getCdkQuote(current, state.provider);
     const steamUrl = safeUrl(current.steamUrl || game.steamUrl) || `https://store.steampowered.com/app/${current.appid || game.appid}/?cc=cn&l=schinese`;
-    const cover = node('div', 'detail-cover'); cover.append(imageElement(game.image, '', '', 'cover-fallback'));
-    const badges = node('div', 'detail-cover-badges'); badges.append(node('span', 'tag', game.catalogOnly ? '目录收录' : current.kind === 'dlc' ? 'DLC' : current.isStandard ? game.edition || '标准版' : '其他版本'), node('span', 'tag', 'Steam 国区'));
+    const cover = node('div', 'detail-cover'); cover.append(imageElement(game.image || (validAppId(game.appid) ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${Number(game.appid)}/header.jpg` : null), '', '', 'cover-fallback'));
+    const badges = node('div', 'detail-cover-badges'); badges.append(node('span', 'tag', game.catalogOnly ? steam ? 'Steam 现价' : '目录收录' : current.kind === 'dlc' ? 'DLC' : current.isStandard ? game.edition || '标准版' : '其他版本'), node('span', 'tag', 'Steam 国区'));
     (Array.isArray(game.genres) ? game.genres : []).slice(0, 1).forEach((genre) => badges.append(node('span', 'tag', genre)));
     cover.append(badges);
     const favorite = node('button', `icon-button detail-favorite${state.favorites.has(Number(game.appid)) ? ' active' : ''}`); favorite.type = 'button'; favorite.setAttribute('aria-label', state.favorites.has(Number(game.appid)) ? '取消关注此游戏' : '关注此游戏'); favorite.setAttribute('aria-pressed', String(state.favorites.has(Number(game.appid)))); favorite.append(icon('star'));
     favorite.addEventListener('click', () => { const id = Number(game.appid); const wasFavorite = state.favorites.has(id); if (wasFavorite) state.favorites.delete(id); else state.favorites.add(id); saveFavorites(); renderGameList(); toast(wasFavorite ? '已取消关注' : '已关注，保存在当前浏览器'); }); cover.append(favorite); container.append(cover);
     const heading = node('div', 'detail-heading'); heading.append(node('h2', '', game.name || game.nameEn || `App ${game.appid}`));
     if (game.nameEn) heading.append(node('p', 'detail-name-en', game.nameEn));
-    const meta = node('div', 'detail-meta'); meta.append(node('span', '', `AppID ${current.appid || game.appid}`), node('span', 'meta-separator'), node('span', '', game.catalogOnly ? '尚未采集价格' : current.isStandard ? game.edition || '标准版' : current.kind === 'dlc' ? '附加内容 / DLC' : current.kind === 'bundle' ? '捆绑包' : '游戏版本'), node('span', 'meta-separator')); const storeLink = externalLink('商店页面 ', steamUrl); storeLink.append(icon('external')); meta.append(storeLink); heading.append(meta); container.append(heading);
+    const meta = node('div', 'detail-meta'); meta.append(node('span', '', `AppID ${current.appid || game.appid}`), node('span', 'meta-separator'), node('span', '', game.catalogOnly ? steam ? 'Steam 现价已采集' : '官方组件查价' : current.isStandard ? game.edition || '标准版' : current.kind === 'dlc' ? '附加内容 / DLC' : current.kind === 'bundle' ? '捆绑包' : '游戏版本'), node('span', 'meta-separator')); const storeLink = externalLink('商店页面 ', steamUrl); storeLink.append(icon('external')); meta.append(storeLink); heading.append(meta); container.append(heading);
     const content = node('div', 'detail-content');
     if (game.catalogOnly) {
-      const empty = node('div', 'catalog-price-pending'); empty.append(icon('clock'), node('h3', '', '已收录，尚未采集价格'), node('p', '', '这款游戏已进入可搜索目录。当前还没有可核对的现价、版本、DLC 或历史记录。'), externalLink('前往 Steam 查看当前价格 ', steamUrl, 'button button-secondary'));
-      content.append(empty); container.append(content); return;
+      renderBasicDetail(game, steam, content, steamUrl); container.append(content); return;
     }
     content.append(createContentSelector(game, current));
     const context = node('div', 'selected-content-heading'); context.append(node('span', '', current.kind === 'dlc' ? '当前附加内容' : '当前版本'), node('h3', '', current.nameZh || current.name)); content.append(context);
     const cards = node('div', 'price-cards'); cards.append(priceCard('Steam 国区直售价', steam, 'direct'), priceCard(state.provider === 'all' ? '最低 CDK 报价' : `${PROVIDERS[state.provider]} CDK 报价`, cdk, 'cdk')); content.append(cards);
+    if (current.isStandard && steam && steam.basicPrice) content.append(node('p', 'basic-coverage', '当前为 Steam 商店本体现价概览；具体购买包请在版本列表中核对。'));
     if (current.isStandard) content.append(createSteamHistory(game, false));
     else {
       const scope = node('div', 'content-history-note'); scope.append(icon('chart'), node('span', '', '所选内容暂未收录历史走势。'));
@@ -592,14 +671,19 @@
   }
   function renderOverview() {
     const data = state.data;
-    const catalogIds = new Set(state.catalogEntries.map((game) => game.appid));
-    $('game-count').textContent = (state.catalogEntries.length + data.games.filter((game) => !catalogIds.has(Number(game.appid))).length).toLocaleString('zh-CN');
-    $('catalog-coverage').textContent = `${data.games.length} 款已采价 · 搜索已同步目录`;
+    const coverage = coverageCounts();
+    $('game-count').textContent = coverage.catalog.toLocaleString('zh-CN');
+    $('catalog-coverage').textContent = '可搜索游戏目录';
+    $('direct-price-count').textContent = coverage.direct.toLocaleString('zh-CN');
+    $('complete-price-count').textContent = coverage.complete.toLocaleString('zh-CN');
+    const directTime = $('direct-price-time');
+    directTime.textContent = state.directData && state.directData.generatedAt ? `基础现价批次：${formatDate(state.directData.generatedAt)} · 每条报价保留实际检查时间${state.directStatus === 'stale' ? ' · 同步受影响' : ''}` : state.directStatus === 'loading' ? '正在读取基础现价…' : '基础现价暂未载入；未覆盖游戏可查看 Steam 官方组件。';
+    directTime.title = '基础现价分批更新；有效现价数包含完整比价游戏。版本、CDK 和历史数据另行采集。';
     renderCatalogStatus();
     const generated = dateValue(data.generatedAt); const minutes = generated ? Math.max(0, (Date.now() - generated.getTime()) / 60000) : Infinity;
     const old = minutes > Math.max(60, (Number(data.refreshMinutes) || 15) * 4);
     $('snapshot-dot').className = `status-dot${old ? ' warning' : ''}`;
-    $('snapshot-label').textContent = window.location.protocol === 'file:' ? '采集时快照 · 仅供本地预览' : old ? '快照已过期 · 已排除最低价' : '价格快照已同步';
+    $('snapshot-label').textContent = window.location.protocol === 'file:' ? '详情 · 本地采集快照' : old ? '详情快照已过期' : '详情快照已同步';
     $('snapshot-time').textContent = `${formatDate(data.generatedAt)} · ${window.location.protocol === 'file:' ? '本地预览快照' : `计划每 ${Number(data.refreshMinutes) || 15} 分钟更新`}`;
     $('snapshot-time').title = '北京时间（UTC+8）。定时采集可能因调度或商家接口延迟。';
     const statuses = $('source-statuses'); statuses.replaceChildren();
@@ -674,7 +758,7 @@
     } catch (error) { toast(`导入失败：${error.message}`, true); }
     finally { $('import-file').value = ''; }
   }
-  function getExpirySignature() { return state.data ? state.data.games.map((game) => (game.quotes || []).map((quote) => effectiveStatus(quote)).join(',')).join('|') : ''; }
+  function getExpirySignature() { return (state.data ? state.data.games.map((game) => [game, ...(game.editions || []), ...(game.dlc || [])].map((item) => (item.quotes || []).map((quote) => effectiveStatus(quote)).join(',')).join(';')).join('|') : '') + '::' + [...state.directEntries.values()].map((entry) => effectiveStatus(directQuote(entry, entry.appid))).join(','); }
   function checkExpiry() { if (state.data) { const signature = getExpirySignature(); if (signature !== state.expirySignature) { state.expirySignature = signature; renderOverview(); renderGameList(); } } }
   function initialize() {
     let theme = document.documentElement.dataset.theme;
@@ -688,7 +772,7 @@
     $('all-tab').addEventListener('click', () => { state.favoritesOnly = false; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); else renderNav(); });
     $('favorites-tab').addEventListener('click', () => { state.favoritesOnly = true; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); else renderNav(); });
     $('catalog-more').addEventListener('click', () => { state.visibleLimit += PAGE_SIZE; if (state.data) renderGameList(); });
-    $('refresh-button').addEventListener('click', () => { loadData(true); loadCatalog(true); });
+    $('refresh-button').addEventListener('click', () => { loadData(true); loadCatalog(true); loadDirectPrices(true); });
     ['help-button', 'method-button', 'privacy-button'].forEach((id) => $(id).addEventListener('click', openHelp));
     ['close-dialog', 'understood-button'].forEach((id) => $(id).addEventListener('click', closeHelp));
     $('help-dialog').addEventListener('click', (event) => { if (event.target === $('help-dialog')) { const box = $('help-dialog').getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeHelp(); } });
@@ -705,8 +789,8 @@
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkExpiry(); });
     setInterval(checkExpiry, 60000);
-    renderNav(); loadData(false); loadCatalog(false);
+    renderNav(); loadData(false); loadCatalog(false); loadDirectPrices(false);
   }
-  window.PriceRadar = Object.freeze({ isPrice, isUsableQuote, isPurchasable, isQuoteExpired, effectiveStatus, getSteamQuote, getCdkQuote, normalizeQuery, filterGames, sortGames, computeSavings, safeUrl, validateData, validateCatalog, validAppId, normalizeHistoryPoints, selectHistoryRange, stepPath, contentOptions, selectedContent });
+  window.PriceRadar = Object.freeze({ isPrice, isUsableQuote, isPurchasable, isQuoteExpired, effectiveStatus, getSteamQuote, getCdkQuote, normalizeQuery, filterGames, sortGames, computeSavings, safeUrl, validateData, validateCatalog, validateDirectData, directQuote, mergeDirectPrice, steamWidgetUrl, validAppId, normalizeHistoryPoints, selectHistoryRange, stepPath, contentOptions, selectedContent });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true }); else initialize();
 })();

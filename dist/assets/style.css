@@ -214,6 +214,32 @@
 :root[data-theme=light] .local-cdk-chart .history-price-line{stroke:var(--blue)}
 :root[data-theme=light] .local-cdk-chart .history-record-point{fill:var(--blue)}
 :root[data-theme=light] .local-cdk-chart .history-price-area{fill:#346b9612}
+
+/* Basic Steam prices are independent from detailed CDK/history coverage. */
+.direct-price-status{margin:-15px 0 24px;color:var(--muted,#8fa5ac);font-size:11px;line-height:1.7}
+.basic-price-cards{grid-template-columns:minmax(0,1fr)}
+.basic-coverage{display:flex;align-items:flex-start;gap:10px;padding:14px;border:1px dashed var(--border,#30434d);border-radius:7px;margin:17px 0;color:var(--muted,#9cb0ba);font-size:12px;line-height:1.9}
+.basic-coverage svg{width:18px;height:18px;margin-top:3px;flex:none}
+.basic-pending-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:17px 0;color:var(--muted,#9cb0ba);font-size:11px}
+.basic-pending-list span{padding:9px;border:1px solid var(--border,#30434d);border-radius:5px;text-align:center}
+.basic-checked-time{font-size:11px;line-height:1.8;color:var(--muted,#9cb0ba)}
+.basic-store-link{margin-top:6px}
+.basic-detail-status{padding:14px;border:1px dashed var(--border,#30434d);border-radius:7px;margin:17px 0;color:var(--muted,#9cb0ba);font-size:12px;line-height:1.9}
+.basic-detail-status h3{font-size:14px;margin:0 0 8px;color:var(--text,#dce8ee)}
+.basic-detail-status p{margin:0}
+.steam-widget-section{min-width:0;margin:20px 0 0}
+.steam-widget-section h3{font-size:14px;margin:0 0 9px}
+.steam-widget-description,.steam-widget-network-note{font-size:11px;line-height:1.8;color:var(--muted,#8fa5ac);margin:8px 0 12px}
+.steam-widget-viewport{width:100%;max-width:100%;overflow:hidden;border:1px solid var(--border,#30434d);border-radius:7px;background:#1b2838}
+.steam-price-widget{display:block;width:100%;max-width:100%;height:205px;border:0;color-scheme:normal}
+.cover-fallback{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+.cover-fallback svg{width:42px;height:42px;opacity:.55}
+.cover-fallback-label{font-size:13px;letter-spacing:1px;opacity:.65}
+:root[data-theme=light] .direct-price-status,:root[data-theme=light] .basic-detail-status,:root[data-theme=light] .steam-widget-description,:root[data-theme=light] .steam-widget-network-note{color:#57717d}
+:root[data-theme=light] .basic-detail-status{background:#f2f7fa;border-color:#c4d6de}
+:root[data-theme=light] .basic-detail-status h3{color:#254759}
+:root[data-theme=light] .basic-coverage,:root[data-theme=light] .basic-pending-list,:root[data-theme=light] .basic-checked-time{color:#57717d}
+@media(max-width:720px){.direct-price-status{font-size:10px;margin:-12px 0 20px}.steam-widget-section h3{font-size:13px}.basic-detail-status{padding:12px;font-size:11px}}
 @media(max-width:930px) and (min-width:721px){.edition-price-labels,.edition-price-row{grid-template-columns:minmax(0,1fr) 67px 67px;gap:5px}.edition-price-labels{font-size:9px}.edition-direct-price,.edition-cdk-price{font-size:10px}.content-selector{padding:9px}.content-selector-heading{flex-wrap:wrap}.content-select{font-size:11px}}
 @media(max-width:720px){.header-actions{margin-left:10px;gap:7px}.header-actions .help-button{margin-left:0;padding:7px}.theme-toggle{width:30px;height:30px}.theme-toggle svg{width:16px;height:16px}.main-nav{gap:14px}.content-selector{padding:12px}.catalog-status{font-size:11px}.edition-price-row{min-height:63px}.edition-content-name{font-size:12px}.content-select{min-height:43px}}
 @media(max-width:440px){.header-actions{gap:4px;margin-left:7px}.theme-toggle{width:28px;height:29px}.main-nav{gap:11px}.nav-button{font-size:10px}.brand-word{font-size:15px}.brand-mark,.brand-mark svg{width:24px;height:28px}.brand{gap:4px}.edition-price-labels,.edition-price-row{grid-template-columns:minmax(0,1fr) 71px 71px;gap:5px}.edition-direct-price,.edition-cdk-price{font-size:10px}.edition-content-name{font-size:11px}.content-selector-heading>span{font-size:9px}.content-selector-heading label{font-size:10px}.content-history-note .text-button{margin-left:23px}.catalog-status{font-size:10px}.stat-value{font-size:11px}.stat-label{font-size:9px}}

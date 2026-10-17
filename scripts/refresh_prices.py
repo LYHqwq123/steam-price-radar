@@ -11,6 +11,7 @@ import copy
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime
@@ -29,6 +30,30 @@ ROOT = Path(__file__).resolve().parents[1]
 def app_id(value):
     value = str(value or "")
     return int(value) if value.isascii() and value.isdigit() and int(value) > 0 else None
+
+
+def parse_appids(value):
+    """Accept only bounded AppID data, never shell expressions or arbitrary URLs."""
+    if isinstance(value, str):
+        if len(value) > 256 or not re.fullmatch(r"[0-9,\s]+", value):
+            raise ValueError("--appids must contain only positive AppIDs separated by commas or whitespace")
+        tokens = [token for token in re.split(r"[,\s]+", value.strip()) if token]
+    elif isinstance(value, (list, tuple)):
+        tokens = value
+    else:
+        raise ValueError("--appids requires 1 to 10 positive AppIDs")
+    if not 1 <= len(tokens) <= 10:
+        raise ValueError("--appids requires 1 to 10 positive AppIDs")
+    output = []
+    for token in tokens:
+        if isinstance(token, bool) or not isinstance(token, (str, int)):
+            raise ValueError("--appids requires positive integer AppIDs")
+        appid = app_id(token)
+        if not appid:
+            raise ValueError("--appids requires positive integer AppIDs")
+        if appid not in output:
+            output.append(appid)
+    return output
 
 
 def records(catalog):
@@ -79,7 +104,7 @@ def last_observation(game):
 
 
 def select_batch(core, directory, previous, batch_size):
-    """Try every never-attempted game before retrying the oldest prior attempt."""
+    """Backfill new games while reserving progress for previously attempted games."""
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 0:
         raise ValueError("batch_size must be a nonnegative integer")
     core_ids = {row["appid"] for row in core}
@@ -96,8 +121,18 @@ def select_batch(core, directory, previous, batch_size):
         freshness = max(attempted_at, last_observation(old.get(appid, {})))
         return (1 if was_seen else 0, freshness, appid)
 
-    candidates = [row for row in directory if row["appid"] not in core_ids]
-    return sorted(candidates, key=priority)[:batch_size]
+    candidates = sorted((row for row in directory if row["appid"] not in core_ids), key=priority)
+    unseen = [row for row in candidates if priority(row)[0] == 0]
+    seen = [row for row in candidates if priority(row)[0] == 1]
+    if not unseen or not seen or not batch_size:
+        return candidates[:batch_size]
+    if batch_size == 1:
+        # Persisted by refresh even when collection fails, so failures cannot
+        # monopolize either the first new game or the refresh queue.
+        last_kind = previous.get("rotation", {}).get("lastSingleBatchKind")
+        return seen[:1] if last_kind == "new" else unseen[:1]
+    new_count = min(len(unseen), batch_size - 1)
+    return unseen[:new_count] + seen[:batch_size - new_count]
 
 
 def merge_daily_history(old, new):
@@ -158,7 +193,8 @@ def source_summaries(games, selected_ids, scheduled_at):
 
 
 def refresh(core_catalog, directory_catalog, previous=None, *, batch_size=3, client=None,
-            workers=3, scheduled_at=None, collector=None, refresh_history=False, refresh_content=False):
+            workers=3, scheduled_at=None, collector=None, refresh_history=False, refresh_content=False,
+            requested_appids=None):
     previous = copy.deepcopy(previous or {})
     core, directory = normalize_catalog(core_catalog), normalize_catalog(directory_catalog)
     if not core:
@@ -166,10 +202,20 @@ def refresh(core_catalog, directory_catalog, previous=None, *, batch_size=3, cli
     scheduled_at = scheduled_at or now_iso()
     if not timestamp(scheduled_at):
         raise ValueError("scheduled_at must be an ISO timestamp with a timezone")
-    batch = select_batch(core, directory, previous, batch_size)
-    selected = core + batch
-    selected_ids = {row["appid"] for row in selected}
     core_ids = {row["appid"] for row in core}
+    requested = parse_appids(requested_appids) if requested_appids is not None else None
+    if requested is not None:
+        # Prefer curated names/mappings when a game also appears in the index.
+        by_id = {row["appid"]: row for row in directory + core}
+        unknown = [appid for appid in requested if appid not in by_id]
+        if unknown:
+            raise ValueError("--appids contains games outside the synchronized directory: " + ", ".join(map(str, unknown)))
+        selected = [by_id[appid] for appid in requested]
+        batch = [row for row in selected if row["appid"] not in core_ids]
+    else:
+        batch = select_batch(core, directory, previous, batch_size)
+        selected = core + batch
+    selected_ids = {row["appid"] for row in selected}
     previous_games = {app_id(row.get("appid")): copy.deepcopy(row)
                       for row in previous.get("games", []) if isinstance(row, dict) and app_id(row.get("appid"))}
     merged = copy.deepcopy(previous_games)
@@ -195,12 +241,26 @@ def refresh(core_catalog, directory_catalog, previous=None, *, batch_size=3, cli
     last_attempts.update({str(appid): scheduled_at for appid in selected_ids})
     returned_ids = {app_id(row.get("appid")) for row in partial.get("games", []) if isinstance(row, dict)}
     succeeded_ids = selected_ids.intersection(returned_ids) if not error else set()
-    rotation = {"scheduledAt": scheduled_at, "checkedCount": len(selected), "coreCount": len(core),
+    rotation = {"scheduledAt": scheduled_at, "checkedCount": len(selected),
+                "coreCount": len(selected_ids.intersection(core_ids)),
                 "batchCount": len(batch), "newCount": sum(appid not in previous_games for appid in succeeded_ids),
-                "coreAppIds": [row["appid"] for row in core], "batchAppIds": [row["appid"] for row in batch],
+                "coreAppIds": [row["appid"] for row in selected if row["appid"] in core_ids],
+                "batchAppIds": [row["appid"] for row in batch],
                 "catalogCount": len({row["appid"] for row in directory + core}),
                 "collectedCount": len(merged), "returnedCount": len(succeeded_ids), "lastAttempts": last_attempts,
                 "status": "error" if error else "partial" if succeeded_ids != selected_ids else "ok"}
+    rotation["kind"] = "requested" if requested is not None else "rotation"
+    if requested is not None:
+        rotation["requestedAppIds"] = requested
+    last_single_kind = previous.get("rotation", {}).get("lastSingleBatchKind")
+    if requested is None and batch_size == 1 and batch:
+        appid = batch[0]["appid"]
+        previous_attempts = previous.get("rotation", {}).get("lastAttempts", {})
+        previous_attempts = previous_attempts if isinstance(previous_attempts, dict) else {}
+        was_seen = appid in previous_games or timestamp(previous_attempts.get(str(appid))) > 0
+        last_single_kind = "seen" if was_seen else "new"
+    if last_single_kind in ("new", "seen"):
+        rotation["lastSingleBatchKind"] = last_single_kind
     if error:
         rotation["error"] = error
     snapshot = copy.deepcopy(previous)
@@ -232,6 +292,8 @@ def main(argv=None):
     parser.add_argument("--index", type=Path, default=ROOT / "dist" / "data" / "catalog-index.json")
     parser.add_argument("--output", type=Path, default=ROOT / "dist" / "data" / "prices.json")
     parser.add_argument("--batch-size", type=int, default=3, help="additional directory games per run; default 3")
+    parser.add_argument("--appids", type=parse_appids,
+                        help="only collect these 1–10 directory AppIDs, separated by commas or whitespace")
     parser.add_argument("--workers", type=int, default=3)
     parser.add_argument("--refresh-history", action="store_true")
     parser.add_argument("--refresh-content", action="store_true")
@@ -239,9 +301,13 @@ def main(argv=None):
     if args.batch_size < 0:
         parser.error("--batch-size must be nonnegative")
     read = lambda path: json.loads(path.read_text(encoding="utf-8-sig"))
-    snapshot = refresh(read(args.catalog), read(args.index) if args.index.exists() else {},
-                       read(args.output) if args.output.exists() else {}, batch_size=args.batch_size,
-                       workers=args.workers, refresh_history=args.refresh_history, refresh_content=args.refresh_content)
+    try:
+        snapshot = refresh(read(args.catalog), read(args.index) if args.index.exists() else {},
+                           read(args.output) if args.output.exists() else {}, batch_size=args.batch_size,
+                           workers=args.workers, refresh_history=args.refresh_history,
+                           refresh_content=args.refresh_content, requested_appids=args.appids)
+    except ValueError as exc:
+        parser.error(str(exc))
     atomic_write(args.output, snapshot)
     stats = {key: value for key, value in snapshot["rotation"].items() if key != "lastAttempts"}
     print(json.dumps(stats, ensure_ascii=True))

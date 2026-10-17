@@ -20,16 +20,19 @@ def package(output: Path) -> Path:
     data = json.loads((site / "data/prices.json").read_text(encoding="utf-8"))
     index_path = site / "data/catalog-index.json"
     catalog = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {"games": []}
+    direct_path = site / "data/direct-prices.json"
+    direct = json.loads(direct_path.read_text(encoding="utf-8")) if direct_path.exists() else {"games": []}
     # Data is never interpreted as markup, including text returned by a store.
     encoded = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     encoded_catalog = json.dumps(catalog, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    encoded_direct = json.dumps(direct, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     html, css_count = re.subn(
         r'<link\b[^>]*href=["\'](?:\./)?assets/style\.css["\'][^>]*>',
         lambda _: "<style>\n" + css + "\n</style>",
         html,
         flags=re.I,
     )
-    script = "<script>window.PRICE_RADAR_BOOTSTRAP=" + encoded + ";window.__CATALOG_DATA__=" + encoded_catalog + ";</script>\n<script>\n" + js.replace("</script", "<\\/script") + "\n</script>"
+    script = "<script>window.PRICE_RADAR_BOOTSTRAP=" + encoded + ";window.__CATALOG_DATA__=" + encoded_catalog + ";window.__DIRECT_PRICE_DATA__=" + encoded_direct + ";</script>\n<script>\n" + js.replace("</script", "<\\/script") + "\n</script>"
     html, js_count = re.subn(
         r'<script\b[^>]*src=["\'](?:\./)?assets/app\.js["\'][^>]*>\s*</script>',
         lambda _: script,

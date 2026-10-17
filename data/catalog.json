@@ -14,6 +14,7 @@
     {"appid":1145360,"name":"哈迪斯","nameEn":"Hades","aliases":["黑帝斯","哈迪斯1"],"genres":["动作","肉鸽"]},
     {"appid":105600,"name":"泰拉瑞亚","nameEn":"Terraria","aliases":["泰拉","Terraria"],"genres":["沙盒","生存"]},
     {"appid":620,"name":"传送门2","nameEn":"Portal 2","aliases":["传送门 2","Portal2"],"genres":["解谜","合作"]},
-    {"appid":1817070,"name":"漫威蜘蛛侠：重制版","nameEn":"Marvel's Spider-Man Remastered","aliases":["蜘蛛侠","漫威蜘蛛侠重制版","Marvel’s Spider-Man Remastered"],"genres":["动作","开放世界"],"sonkwo":{"sku":19943,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Marvel's Spider-Man Remastered","search":"Marvel's Spider-Man Remastered","verificationUrl":"https://www.sonkwo.hk/sku/19943"}}
+    {"appid":1817070,"name":"漫威蜘蛛侠：重制版","nameEn":"Marvel's Spider-Man Remastered","aliases":["蜘蛛侠","漫威蜘蛛侠重制版","Marvel’s Spider-Man Remastered"],"genres":["动作","开放世界"],"sonkwo":{"sku":19943,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Marvel's Spider-Man Remastered","search":"Marvel's Spider-Man Remastered","verificationUrl":"https://www.sonkwo.hk/sku/19943"}},
+    {"appid":386940,"name":"超级鸡马","nameEn":"Ultimate Chicken Horse","aliases":["鸡马","Ultimate Chicken Horse"],"genres":["多人","平台跳跃"]}
   ]
 }
