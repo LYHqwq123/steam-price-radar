@@ -45,7 +45,7 @@ jobs:
           if [ -n "$REQUESTED_APPIDS" ]; then
             python scripts/refresh_prices.py --appids "$REQUESTED_APPIDS"
           else
-            python scripts/refresh_prices.py --batch-size 3
+            python scripts/refresh_prices.py --batch-size 20
           fi
       - name: Collect Steam current prices across the directory
         run: python scripts/direct_prices.py --max-batches 80 --delay 0.7
