@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "description": "精选游戏的简体中文名称与经过人工核验的标准版映射；未核验 SKU 不自动采用模糊搜索结果。",
+  "games": [
+    {"appid":1245620,"name":"艾尔登法环","nameEn":"ELDEN RING","aliases":["老头环","艾尔登","Elden Ring"],"genres":["动作角色扮演","开放世界"],"sonkwo":{"sku":105539,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"ELDEN RING","search":"ELDEN RING","verificationUrl":"https://www.sonkwo.hk/sku/105539"}},
+    {"appid":2050650,"name":"生化危机4 重制版","nameEn":"Resident Evil 4","aliases":["生化4","RE4","Resident Evil 4"],"genres":["生存恐怖","动作"],"sonkwo":{"sku":20947,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Resident Evil 4","search":"Resident Evil 4","verificationUrl":"https://www.sonkwo.hk/sku/20947"}},
+    {"appid":1091500,"name":"赛博朋克2077","nameEn":"Cyberpunk 2077","aliases":["赛博朋克 2077","2077","Cyberpunk 2077"],"genres":["开放世界","角色扮演"],"sonkwo":{"sku":106112,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Cyberpunk 2077","search":"Cyberpunk 2077","verificationUrl":"https://www.sonkwo.hk/sku/106112"}},
+    {"appid":2358720,"name":"黑神话：悟空","nameEn":"Black Myth: Wukong","aliases":["黑神话悟空","悟空","黑猴"],"genres":["动作角色扮演","神话"],"sonkwo":{"sku":103493,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Black Myth: Wukong","search":"Black Myth: Wukong","verificationUrl":"https://www.sonkwo.hk/sku/103493"}},
+    {"appid":1086940,"name":"博德之门3","nameEn":"Baldur's Gate 3","aliases":["博德3","BG3","Baldur’s Gate 3"],"genres":["角色扮演","回合制"]},
+    {"appid":1174180,"name":"荒野大镖客：救赎2","nameEn":"Red Dead Redemption 2","aliases":["荒野大镖客2","大镖客2","RDR2"],"genres":["开放世界","冒险"]},
+    {"appid":990080,"name":"霍格沃茨之遗","nameEn":"Hogwarts Legacy","aliases":["霍格沃兹之遗","哈利波特"],"genres":["开放世界","魔法"]},
+    {"appid":292030,"name":"巫师3：狂猎","nameEn":"The Witcher 3: Wild Hunt","aliases":["巫师3","巫师 3：狂猎","The Witcher 3: Wild Hunt","The Witcher 3: Wild Hunt — Remastered"],"genres":["角色扮演","开放世界"]},
+    {"appid":413150,"name":"星露谷物语","nameEn":"Stardew Valley","aliases":["星露谷","种田"],"genres":["模拟经营","休闲"]},
+    {"appid":1145360,"name":"哈迪斯","nameEn":"Hades","aliases":["黑帝斯","哈迪斯1"],"genres":["动作","肉鸽"]},
+    {"appid":105600,"name":"泰拉瑞亚","nameEn":"Terraria","aliases":["泰拉","Terraria"],"genres":["沙盒","生存"]},
+    {"appid":620,"name":"传送门2","nameEn":"Portal 2","aliases":["传送门 2","Portal2"],"genres":["解谜","合作"]},
+    {"appid":1817070,"name":"漫威蜘蛛侠：重制版","nameEn":"Marvel's Spider-Man Remastered","aliases":["蜘蛛侠","漫威蜘蛛侠重制版","Marvel’s Spider-Man Remastered"],"genres":["动作","开放世界"],"sonkwo":{"sku":19943,"area":"abroad","platform":"steam","edition":"standard","verified":true,"verifiedAt":"2026-10-17","name":"Marvel's Spider-Man Remastered","search":"Marvel's Spider-Man Remastered","verificationUrl":"https://www.sonkwo.hk/sku/19943"}}
+  ]
+}

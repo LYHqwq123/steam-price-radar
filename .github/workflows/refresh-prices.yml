@@ -1,0 +1,73 @@
+name: Refresh prices and deploy
+
+on:
+  schedule:
+    # UTC: offset from the start of the hour to reduce peak-time queueing.
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steam-price-radar-pages
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: write
+      pages: read
+    steps:
+      - name: Checkout latest catalog and saved history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Verify price matching safeguards
+        run: python -m unittest discover -s tests -v
+      - name: Collect current prices
+        run: python scripts/refresh_prices.py --batch-size 3
+      - name: Validate prices and website
+        run: node scripts/check_site.mjs
+      - name: Save changed prices
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git add -- dist/data/prices.json
+          if git diff --cached --quiet; then
+            echo 'No price data changed.'
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'data: refresh game prices'
+            git push origin "HEAD:$DEFAULT_BRANCH"
+          fi
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload refreshed website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  # A push made with GITHUB_TOKEN does not trigger pages.yml. Deploy here directly.
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy refreshed website
+        id: deployment
+        uses: actions/deploy-pages@v4
