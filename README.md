@@ -2,7 +2,7 @@
 
 中文静态比价网站：搜索 Steam 游戏目录，分别比较 **Steam 国区直售价** 与 **杉果、SteamPY、SteamCici 的 CDK 报价**，查看标准版、豪华版、捆绑包及 DLC，并显示来自小黑盒的本体标准版价格走势。支持白天／黑夜主题，主题和关注清单保存在当前浏览器。
 
-目标仓库为 [LYHqwq123/steam-price-radar](https://github.com/LYHqwq123/steam-price-radar)，目标 Pages 地址为 [lyhqwq123.github.io/steam-price-radar](https://lyhqwq123.github.io/steam-price-radar/)。是否已经发布，以仓库 Actions 和 Pages 的实际部署状态为准。
+在线网站：[游戏价签](https://lyhqwq123.github.io/steam-price-radar/)。源码仓库：[LYHqwq123/steam-price-radar](https://github.com/LYHqwq123/steam-price-radar)。首次部署、自动采价和目录同步已于 2026-10-17 在 GitHub Actions 实际运行成功；后续状态可在仓库 Actions 查看。
 
 网页读取已发布的目录和价格 JSON；自动同步由 GitHub Actions 执行，无需常驻服务器。**目录可搜索，不代表每款游戏已有价格；定时快照也不是全库实时行情。**
 
