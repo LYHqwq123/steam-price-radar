@@ -57,20 +57,20 @@ jobs:
       - name: Stage shards owned by this worker
         if: always()
         run: |
-          mkdir -p .worker-output
+          mkdir -p worker-output
           for offset in 0 1 2 3 4 5 6 7; do
             index=$(( ${{ matrix.worker }} * 8 + offset ))
             file=$(printf 'dist/data/price-shards/price-%02d.json' "$index")
-            if [ -f "$file" ]; then cp "$file" .worker-output/; fi
+            if [ -f "$file" ]; then cp "$file" worker-output/; fi
           done
-          ls -l .worker-output
+          ls -l worker-output
       - name: Upload shards
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: price-shards-${{ matrix.worker }}
-          path: .worker-output/*.json
-          if-no-files-found: warn
+          path: worker-output/*.json
+          if-no-files-found: error
           retention-days: 3
 
   publish:
@@ -97,6 +97,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: bash scripts/restore_price_snapshot.sh
+      - name: Require all eight current-run worker artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts' > worker-artifacts.json
+          python scripts/verify_price_workers.py --artifacts worker-artifacts.json --workers 8
       - name: Download all worker shards
         uses: actions/download-artifact@v4
         with:
