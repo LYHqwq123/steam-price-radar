@@ -1,8 +1,10 @@
-"""Batch Steam CN app price overviews for the synchronized search directory.
+"""Collect Steam CN current prices for the full directory in sharded batches.
 
-This intentionally collects only the app's price overview. Exact editions, DLC,
-CDK offers and historical series remain the separate, slower detail collector.
-An empty price_overview response does not prove that an app is free.
+Each worker owns a consecutive range of public ``appid % shard_count`` shards.
+With 64 public shards and 8 workers, one worker refreshes eight shard files.
+Consecutive ranges balance Steam AppIDs, which are predominantly even numbers.
+An empty ``price_overview`` response does not prove that an app is free, and a
+failed request preserves the previous amount with its original checked time.
 """
 from __future__ import annotations
 
@@ -11,27 +13,36 @@ import copy
 from datetime import datetime, timezone
 import json
 import math
-import os
-from pathlib import Path
 import sys
-import tempfile
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+try:
+    from .catalog_format import catalog_appids, read_catalog
+    from .price_format import (SHARD_COUNT, SOURCE_URL, build_manifest, legacy_records,
+                               load_shard_records, shard_filename, timestamp, write_manifest, write_shard)
+except ImportError:
+    from catalog_format import catalog_appids, read_catalog
+    from price_format import (SHARD_COUNT, SOURCE_URL, build_manifest, legacy_records,
+                              load_shard_records, shard_filename, timestamp, write_manifest, write_shard)
 
 ROOT = Path(__file__).resolve().parents[1]
-API_URL = "https://store.steampowered.com/api/appdetails"
+API_URL = SOURCE_URL
 MAX_BATCH_SIZE = 100
 MIN_DELAY = 0.7
+RETRY_ATTEMPTS = 3
+RATE_LIMIT_CODES = {403, 420, 429, 503}
+TRANSIENT_CODES = {500, 502, 504}
 
 
 class RateLimitedError(RuntimeError):
-    """Stop this run instead of retrying every remaining batch."""
+    """Stop this worker instead of retrying every remaining batch."""
 
 
-def now_iso():
+def iso_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
@@ -58,51 +69,51 @@ def cents(value):
     return round(number / 100, 2) if number is not None and float(value).is_integer() else None
 
 
-def read_json(path, default=None):
+def retry_after(error):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return copy.deepcopy(default)
+        value = int(error.headers.get("Retry-After", ""))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return max(1, min(value, 90))
 
 
-def atomic_write(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
-                                         prefix="." + path.name + ".", suffix=".tmp", delete=False) as handle:
-            temporary = Path(handle.name)
-            json.dump(value, handle, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-            handle.write("\n")
-        os.replace(temporary, path)
-    finally:
-        if temporary and temporary.exists():
-            temporary.unlink()
-
-
-def request_batch(ids):
-    query = urlencode({"appids": ",".join(map(str, ids)), "filters": "price_overview", "cc": "cn", "l": "schinese"})
+def request_batch(ids, *, attempts=RETRY_ATTEMPTS, sleeper=None):
+    sleeper = sleeper or time.sleep
+    query = urlencode({"appids": ",".join(map(str, ids)), "filters": "price_overview",
+                       "cc": "cn", "l": "schinese"})
     request = Request(API_URL + "?" + query, headers={
-        "User-Agent": "SteamPriceRadar/1.0 (public prices; read-only)", "Accept": "application/json",
+        "User-Agent": "SteamPriceRadar/2.0 (public prices; read-only)", "Accept": "application/json",
     })
-    for attempt in range(2):
+    last_error = None
+    for attempt in range(attempts):
         try:
-            with urlopen(request, timeout=18) as response:
+            with urlopen(request, timeout=20) as response:
                 payload = json.load(response)
-            break
+            if not isinstance(payload, dict) or not payload:
+                raise ValueError("Steam returned no batch result")
+            return payload
         except HTTPError as error:
-            if error.code in (403, 420, 429, 503):
-                error.close()
-                raise RateLimitedError(f"Steam HTTP {error.code}; stopped without retries") from error
+            code = error.code
+            retry_seconds = retry_after(error)
+            error.close()
+            last_error = error
+            if code in RATE_LIMIT_CODES:
+                if attempt + 1 >= attempts:
+                    raise RateLimitedError(f"Steam HTTP {code}; stopped without further retries") from None
+                sleeper(min(90, retry_seconds or 20 * (attempt + 1)))
+                continue
+            if code in TRANSIENT_CODES:
+                if attempt + 1 >= attempts:
+                    raise
+                sleeper(min(30, retry_seconds or 2 ** (attempt + 1)))
+                continue
             raise
-        except (URLError, TimeoutError, ConnectionError):
-            if attempt:
+        except (URLError, TimeoutError, ConnectionError) as error:
+            last_error = error
+            if attempt + 1 >= attempts:
                 raise
-            time.sleep(MIN_DELAY)
-    if not isinstance(payload, dict) or not payload:
-        raise ValueError("Steam returned no batch result")
-    return payload
+            sleeper(min(30, 2 ** (attempt + 1)))
+    raise last_error or RuntimeError("Steam batch request failed")
 
 
 def blank_record(appid, *, checked_at=None, status="error", note="尚未采集；等待后续批次。"):
@@ -139,15 +150,18 @@ def parse_record(appid, response, checked_at, previous=None):
 
 
 def previous_records(previous):
-    if (not isinstance(previous, dict) or previous.get("source") != "steam"
-            or previous.get("country") != "CN" or previous.get("currency") != "CNY"):
-        return {}
+    """Normalize worker-owned records or a legacy schema v1 snapshot."""
+    if isinstance(previous, dict) and isinstance(previous.get("games"), list):
+        return legacy_records(previous)
     result = {}
-    for raw in previous.get("games", []) if isinstance(previous.get("games"), list) else []:
-        if not isinstance(raw, dict) or not (appid := app_id(raw.get("appid"))):
+    for key, raw in (previous or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        appid = app_id(raw.get("appid") if raw.get("appid") is not None else key)
+        if not appid:
             continue
         row = blank_record(appid)
-        row.update({key: copy.deepcopy(raw[key]) for key in row if key in raw})
+        row.update({field: copy.deepcopy(raw[field]) for field in row if field in raw})
         row["appid"] = appid
         row["price"], row["originalPrice"] = amount(row["price"]), amount(row["originalPrice"])
         row["discount"] = amount(row["discount"])
@@ -157,57 +171,45 @@ def previous_records(previous):
             row["status"] = "error"
         if row["price"] is None and row["status"] in ("ok", "stale"):
             row["status"] = "error"
+        if not isinstance(row["checkedAt"], str) or not timestamp(row["checkedAt"]):
+            row["checkedAt"] = None
         result[appid] = row
     return result
 
 
-def collect(index, previous=None, *, batch_size=100, max_batches=None, delay=MIN_DELAY,
-            fetcher=request_batch, sleeper=time.sleep, clock=now_iso, checkpoint=None, progress=print):
-    if not isinstance(batch_size, int) or isinstance(batch_size, bool) or not 1 <= batch_size <= MAX_BATCH_SIZE:
+def validate_limits(batch_size=MAX_BATCH_SIZE, max_batches=None, max_seconds=None, delay=MIN_DELAY):
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= MAX_BATCH_SIZE:
         raise ValueError("batch_size must be between 1 and 100")
-    if max_batches is not None and (not isinstance(max_batches, int) or isinstance(max_batches, bool) or max_batches < 1):
+    if max_batches is not None and (isinstance(max_batches, bool) or not isinstance(max_batches, int) or max_batches < 1):
         raise ValueError("max_batches must be positive")
-    if not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < MIN_DELAY:
+    if max_seconds is not None and (isinstance(max_seconds, bool) or not isinstance(max_seconds, (int, float))
+                                    or not math.isfinite(max_seconds) or max_seconds <= 0):
+        raise ValueError("max_seconds must be positive")
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < MIN_DELAY:
         raise ValueError("delay must be at least 0.7 seconds")
-    ids = list(dict.fromkeys(appid for row in index.get("games", [])
-                             if isinstance(row, dict) and (appid := app_id(row.get("appid")))))
-    records = previous_records(previous)
-    had_previous = any(row.get("checkedAt") for row in records.values())
-    for appid in ids:
-        records.setdefault(appid, blank_record(appid))
-    state = previous.get("syncState", {}) if isinstance(previous, dict) else {}
-    offset = state.get("nextIndex", 0) if isinstance(state, dict) else 0
-    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
-        offset = 0
-    next_appid = state.get("nextAppid") if isinstance(state, dict) else None
-    start = ids.index(next_appid) if next_appid in ids else offset % len(ids) if ids else 0
-    ordered = ids[start:] + ids[:start]
-    requested, successes, batches, failures = 0, 0, 0, 0
-    errors = []
+
+
+def collect(appids, previous=None, *, fetcher=request_batch, sleeper=time.sleep, clock=iso_now,
+            batch_size=MAX_BATCH_SIZE, max_batches=None, max_seconds=None, delay=MIN_DELAY,
+            progress=None):
+    """Fetch explicit AppIDs. Unattempted AppIDs are never rewritten."""
+    validate_limits(batch_size, max_batches, max_seconds, delay)
+    ids = list(dict.fromkeys(appid for row in appids if (appid := app_id(row))))
+    if not ids:
+        raise ValueError("at least one positive AppID is required")
+    known = previous_records(previous)
+    ordered = sorted(ids, key=lambda value: ((known.get(value) or {}).get("checkedAt") or "", value))
+    records, attempted, errors = {}, [], []
+    batches = successes = consecutive_failures = 0
     generated_at = clock()
-
-    def snapshot():
-        cursor = (start + requested) % len(ids) if ids else 0
-        all_done = requested == len(ids) and bool(ids)
-        status = "ok" if all_done and not errors else "partial"
-        if not successes and not had_previous:
-            status = "error"
-        rows = list(records.values())
-        return {"schemaVersion": 1, "generatedAt": generated_at, "source": "steam",
-                "sourceUrl": API_URL, "country": "CN", "currency": "CNY", "refreshMinutes": 15,
-                "status": status, "gameCount": len(rows), "catalogGameCount": len(ids),
-                "pricedCount": sum(row["status"] == "ok" and row["price"] is not None for row in rows),
-                "scope": "已同步游戏目录的 Steam 国区应用现价概览，并非完整 Steam 游戏库或全部购买版本。",
-                "note": "未返回价格不等于免费；具体版本、DLC 和历史由详情采集任务另行补充。",
-                "games": rows, "processedCount": requested, "successfulBatches": successes,
-                "attemptedBatches": batches, "errors": errors,
-                "syncState": {"nextIndex": cursor, "nextAppid": ids[cursor] if ids else None,
-                              "lastRunCompletedDirectory": all_done}}
-
+    started = time.monotonic()
+    broken = False
     for position in range(0, len(ordered), batch_size):
         if max_batches is not None and batches >= max_batches:
             break
-        if batches:
+        if max_seconds is not None and batches and time.monotonic() - started >= max_seconds:
+            break
+        if batches and delay:
             sleeper(delay)
         chunk = ordered[position:position + batch_size]
         checked_at = clock()
@@ -216,52 +218,137 @@ def collect(index, previous=None, *, batch_size=100, max_batches=None, delay=MIN
             payload = fetcher(chunk)
             if not isinstance(payload, dict) or not payload:
                 raise ValueError("Steam returned no batch result")
-            for appid in chunk:
-                records[appid] = parse_record(appid, payload.get(str(appid)), checked_at, records.get(appid))
+            for value in chunk:
+                records[value] = parse_record(value, payload.get(str(value)), checked_at, known.get(value))
             successes += 1
-            failures = 0
+            consecutive_failures = 0
         except Exception as error:
-            failures += 1
-            stop = isinstance(error, RateLimitedError) or isinstance(error, HTTPError) and error.code in (403, 420, 429, 503) or failures >= 3
-            label = (f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__)
+            consecutive_failures += 1
+            stop = isinstance(error, RateLimitedError) or consecutive_failures >= 3
+            label = f"HTTP {error.code}" if isinstance(error, HTTPError) else type(error).__name__
             if isinstance(error, HTTPError):
                 error.close()
             errors.append({"batch": batches + 1, "type": label, "stopped": stop})
-            for appid in chunk:
-                records[appid] = failed_record(appid, records.get(appid), checked_at,
+            for value in chunk:
+                records[value] = failed_record(value, known.get(value), checked_at,
                                                "本轮 Steam 查询失败；等待后续重试。")
-        requested += len(chunk)
+        attempted.extend(chunk)
         batches += 1
         generated_at = clock()
         if progress:
-            progress(f"Direct prices: batch={batches} processed={requested}/{len(ids)} successful_batches={successes} errors={len(errors)}", flush=True)
-        if checkpoint and batches % 10 == 0:
-            checkpoint(snapshot())
+            progress(f"prices worker: batch={batches} attempted={len(attempted)}/{len(ids)} "
+                     f"successful={successes} errors={len(errors)}")
         if stop:
+            broken = True
             break
-    return snapshot()
+    completed = len(attempted) == len(ids) and not errors
+    status = "error" if not successes else "ok" if completed else "partial"
+    updates = {value: records[value] for value in attempted if value in records}
+    return {"generatedAt": generated_at, "status": status, "selectedCount": len(ids),
+            "attemptedCount": len(attempted), "batchCount": batches, "successfulBatches": successes,
+            "errorCount": len(errors), "errors": errors, "completed": completed,
+            "stopped": broken or len(attempted) < len(ids),
+            "attemptedAppids": attempted, "updates": updates}
 
 
-def main(argv=None):
+def worker_shards(shard_count, worker_index=0, worker_count=1):
+    if (isinstance(worker_count, bool) or not isinstance(worker_count, int) or worker_count < 1
+            or isinstance(worker_index, bool) or not isinstance(worker_index, int)
+            or not 0 <= worker_index < worker_count):
+        raise ValueError("worker_index and worker_count must describe a valid worker")
+    if shard_count % worker_count:
+        raise ValueError("shard_count must be divisible by worker_count")
+    width = shard_count // worker_count
+    return range(worker_index * width, (worker_index + 1) * width)
+
+
+def worker_appids(catalog, worker_index=0, worker_count=1, shard_count=SHARD_COUNT):
+    owned = set(worker_shards(shard_count, worker_index, worker_count))
+    ids = catalog_appids(catalog)
+    return ids, [value for value in ids if value % shard_count in owned]
+
+
+def read_worker_shards(shard_dir, shard_count, worker_index=0, worker_count=1):
+    records = {}
+    for index in worker_shards(shard_count, worker_index, worker_count):
+        found, shard = load_shard_records(Path(shard_dir) / shard_filename(index), index, shard_count)
+        if shard:
+            records.update(found)
+    return records
+
+
+def write_worker_shards(shard_dir, shard_count, worker_index, worker_count, catalog_ids,
+                        previous, updates, attempted, checked_at):
+    owned = set(worker_shards(shard_count, worker_index, worker_count))
+    touched = sorted({value % shard_count for value in attempted})
+    if any(index not in owned for index in touched):
+        raise ValueError("worker attempted an AppID outside its shard class")
+    wanted = {index: [] for index in touched}
+    for value in catalog_ids:
+        index = value % shard_count
+        if index in wanted:
+            wanted[index].append(value)
+    written = []
+    for index in touched:
+        rows = [updates.get(value) or previous.get(value) for value in wanted[index]]
+        rows = [row for row in rows if row]
+        written.append(write_shard(Path(shard_dir) / shard_filename(index), index, shard_count,
+                                   checked_at, rows))
+    return written
+
+
+def main(argv=None, *, fetcher=request_batch, sleeper=time.sleep, clock=iso_now):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", type=Path, default=ROOT / "dist/data/catalog-index.json")
-    parser.add_argument("--output", type=Path, default=ROOT / "dist/data/direct-prices.json")
-    parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist/data")
+    parser.add_argument("--shard-count", type=int, default=SHARD_COUNT)
+    parser.add_argument("--worker-index", type=int, default=0)
+    parser.add_argument("--worker-count", type=int, default=1)
+    parser.add_argument("--prefix", default="price-shards")
+    parser.add_argument("--batch-size", type=int, default=MAX_BATCH_SIZE)
     parser.add_argument("--max-batches", type=int)
-    parser.add_argument("--delay", type=float, default=MIN_DELAY)
+    parser.add_argument("--max-seconds", type=float)
+    parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--refresh-minutes", type=int, default=120)
+    parser.add_argument("--write-manifest", action="store_true")
     args = parser.parse_args(argv)
     try:
-        index = read_json(args.index)
-        if not isinstance(index, dict) or not isinstance(index.get("games"), list):
-            raise ValueError("index must contain a games array")
-        previous = read_json(args.output, {})
-        result = collect(index, previous, batch_size=args.batch_size, max_batches=args.max_batches,
-                         delay=args.delay, checkpoint=lambda value: atomic_write(args.output, value))
-        atomic_write(args.output, result)
-        print(f"Direct prices saved: status={result['status']} priced={result['pricedCount']}/{result['gameCount']}", flush=True)
-        return 1 if result["status"] == "error" else 0
+        validate_limits(args.batch_size, args.max_batches, args.max_seconds, args.delay)
+        if not 1 <= args.shard_count <= 1000:
+            raise ValueError("shard-count must be between 1 and 1000")
+        if args.worker_count < 1 or not 0 <= args.worker_index < args.worker_count:
+            raise ValueError("worker-index must be within worker-count")
+        if args.shard_count % args.worker_count:
+            raise ValueError("shard-count must be divisible by worker-count")
+        if args.refresh_minutes < 1:
+            raise ValueError("refresh-minutes must be positive")
+        catalog = read_catalog(args.index)
+        all_ids, ids = worker_appids(catalog, args.worker_index, args.worker_count, args.shard_count)
+        if not all_ids:
+            raise ValueError("catalog contains no valid games")
+        shard_dir = args.output_dir / args.prefix
+        previous = read_worker_shards(shard_dir, args.shard_count, args.worker_index, args.worker_count)
+        result = collect(ids, previous, fetcher=fetcher, sleeper=sleeper, clock=clock,
+                         batch_size=args.batch_size, max_batches=args.max_batches,
+                         max_seconds=args.max_seconds, delay=args.delay,
+                         progress=lambda message: print(message, flush=True))
+        written = write_worker_shards(shard_dir, args.shard_count, args.worker_index, args.worker_count,
+                                      all_ids, previous, result["updates"], result["attemptedAppids"],
+                                      result["generatedAt"])
+        if args.write_manifest:
+            manifest = build_manifest(shard_dir, catalog_appids=all_ids, output_dir=args.output_dir,
+                                      refresh_minutes=args.refresh_minutes, generated_at=result["generatedAt"],
+                                      prefix=args.prefix, shard_count=args.shard_count)
+            write_manifest(args.output_dir / "price-manifest.json", manifest)
+        stats = {key: result[key] for key in ("generatedAt", "status", "selectedCount", "attemptedCount",
+                                              "batchCount", "successfulBatches", "errorCount", "completed", "stopped")}
+        stats.update(workerIndex=args.worker_index, workerCount=args.worker_count,
+                     shardCount=args.shard_count, writtenShards=[entry["index"] for entry in written],
+                     writtenRows=sum(entry["count"] for entry in written), errors=result["errors"])
+        print(json.dumps(stats, ensure_ascii=True))
+        return 0
     except (ValueError, OSError, TypeError) as error:
-        print(f"Direct prices failed: {type(error).__name__}", file=sys.stderr)
+        print(f"Steam price worker failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
 
 

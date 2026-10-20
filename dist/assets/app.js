@@ -7,6 +7,14 @@
   const FAVORITES_KEY = 'game-price-radar.favorites.v1';
   const THEME_KEY = 'game-price-radar.theme.v1';
   const PAGE_SIZE = 30;
+  const MAX_SEARCH_RESULTS = 2000;
+  const SEARCH_BUFFER = 4000;
+  const DEFAULT_PRICE_REFRESH_MINUTES = 120;
+  const DEFAULT_DETAIL_REFRESH_MINUTES = 15;
+  const PRICE_STATUSES = ['ok', 'unavailable', 'stale', 'error'];
+  const SHARD_PATH = /^price-shards\/price-[0-9]{2}\.json$/;
+  const REC = { APPID: 0, PRICE: 1, ORIGINAL: 2, DISCOUNT: 3, STATUS: 4, CHECKED: 5 };
+  const EMPTY_ALIASES = [];
   const icons = {
     external: ['M14 4h6v6', 'm20 4-9 9', 'M10 4H4v16h16v-6'],
     star: ['m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z'],
@@ -24,7 +32,19 @@
     sun: ['M12 3v2', 'M12 19v2', 'M3 12h2', 'M19 12h2', 'm5.6 5.6 1.4 1.4', 'm17 17 1.4 1.4', 'm5.6 18.4 1.4-1.4', 'm17 7 1.4-1.4'],
     moon: ['M20 14a8.5 8.5 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z']
   };
-  const state = { data: null, directData: null, directEntries: new Map(), directStatus: 'loading', directLoading: false, catalog: null, catalogEntries: [], catalogStatus: 'loading', query: '', provider: 'all', sort: 'recommended', favorites: readFavorites(), favoritesOnly: false, selected: null, loading: false, catalogLoading: false, visibleLimit: PAGE_SIZE, searchTimer: null, toastTimer: null, dialogReturn: null, expirySignature: '', historyRanges: new Map(), historyReturn: null, contentSelections: new Map(), contentListOpen: new Map() };
+  const state = {
+    data: null, detailList: [], detailGames: new Map(), detailStatus: 'loading',
+    directEntries: new Map(), directStatus: 'loading', directLoading: false, directStats: null,
+    priceManifest: null, priceRefreshMinutes: DEFAULT_PRICE_REFRESH_MINUTES, priceShardCount: 0,
+    priceShardsLoaded: 0, priceShardsTotal: 0, priceShardErrors: 0, priceMissingShards: 0,
+    pricePriced: 0, priceVersion: 0, progressTimer: null, featuredCache: null, featuredLeaders: 0,
+    catalog: null, catalogRows: [], catalogStatus: 'loading', catalogLoading: false,
+    searchTruncated: false, query: '', provider: 'all', sort: 'recommended',
+    favorites: readFavorites(), favoritesOnly: false, selected: null, loading: false,
+    visibleLimit: PAGE_SIZE, searchTimer: null, toastTimer: null, dialogReturn: null,
+    expirySignature: '', historyRanges: new Map(), historyReturn: null,
+    contentSelections: new Map(), contentListOpen: new Map()
+  };
   const $ = (id) => document.getElementById(id);
 
   function node(tag, className, value) {
@@ -64,10 +84,76 @@
     return a;
   }
   function isPrice(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0; }
+  function dateValue(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? null : date; }
+  function formatDate(value, short) {
+    const date = dateValue(value);
+    if (!date) return '尚未更新';
+    return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: short ? undefined : '2-digit', minute: short ? undefined : '2-digit', hour12: false }).format(date);
+  }
+  function timeAgo(value) {
+    const date = dateValue(value);
+    if (!date) return '时间未知';
+    const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
+    if (minutes < 1) return '刚刚更新';
+    if (minutes < 60) return `${minutes} 分钟前`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
+    return formatDate(value);
+  }
+  function formatRefresh(minutes) {
+    const value = Number(minutes) || 0;
+    if (value >= 1440 && value % 1440 === 0) return `${value / 1440} 天`;
+    if (value >= 60 && value % 60 === 0) return `${value / 60} 小时`;
+    return `${value} 分钟`;
+  }
+  function validAppId(value) { if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) return false; const id = Number(value); return Number.isSafeInteger(id) && id > 0 && id <= 2147483647; }
+  function readFavorites() {
+    try { const parsed = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'); return new Set(Array.isArray(parsed) ? parsed.filter(validAppId).map(Number) : []); } catch (_) { return new Set(); }
+  }
+  function saveFavorites() {
+    try { localStorage.setItem(FAVORITES_KEY, JSON.stringify([...state.favorites])); } catch (_) { toast('浏览器未允许保存关注；可导出清单保留。', true); }
+  }
+  function toast(message, error) {
+    clearTimeout(state.toastTimer);
+    const item = node('div', error ? 'toast error' : 'toast', message);
+    $('toast-region').replaceChildren(item);
+    state.toastTimer = setTimeout(() => $('toast-region').replaceChildren(), 4200);
+  }
+  function imageElement(url, alt, className, fallbackClass) {
+    const source = safeUrl(url);
+    const fallback = () => { const placeholder = node('span', fallbackClass || 'thumbnail-fallback'); placeholder.setAttribute('aria-hidden', 'true'); placeholder.append(icon('store')); if (fallbackClass === 'cover-fallback') placeholder.append(node('span', 'cover-fallback-label', 'Steam 游戏')); return placeholder; };
+    if (!source) return fallback();
+    const img = node('img', className); img.src = source; img.alt = alt; img.loading = 'lazy'; img.decoding = 'async';
+    img.addEventListener('error', () => img.replaceWith(fallback()), { once: true });
+    return img;
+  }
+  function currency(value) { return isPrice(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: Number.isInteger(value) ? 0 : 2 }) : '—'; }
+  function moneyNode(value, className) {
+    const result = node('span', className || '');
+    if (!isPrice(value)) { result.textContent = '暂无报价'; return result; }
+    result.append(node('span', 'price-symbol', '¥'), document.createTextNode(currency(value)));
+    return result;
+  }
+  async function mapLimit(items, limit, worker) {
+    let next = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const item = items[next];
+        next += 1;
+        await worker(item);
+      }
+    });
+    await Promise.all(runners);
+  }
+
+  function quoteRefreshMinutes(quote) {
+    if (quote && quote.basicPrice) return state.priceRefreshMinutes || DEFAULT_PRICE_REFRESH_MINUTES;
+    return Number(state.data && state.data.refreshMinutes) || DEFAULT_DETAIL_REFRESH_MINUTES;
+  }
   function isQuoteExpired(quote, now, refreshMinutes) {
     if (!quote || window.location.protocol === 'file:') return false;
     const checked = dateValue(quote.checkedAt);
-    const threshold = Math.max(60, (Number(refreshMinutes) || Number(state.data && state.data.refreshMinutes) || 15) * 4) * 60000;
+    const minutes = Number(refreshMinutes) || quoteRefreshMinutes(quote);
+    const threshold = Math.min(Math.max(60, minutes * 4), 48 * 60) * 60000;
     return !checked || (typeof now === 'number' ? now : Date.now()) - checked.getTime() > threshold;
   }
   function effectiveStatus(quote) { return quote && ['ok', 'unknown'].includes(quote.status) && isQuoteExpired(quote) ? 'stale' : quote && quote.status; }
@@ -109,122 +195,228 @@
     else if (sort === 'name') result.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'));
     return result;
   }
-  function currency(value) { return isPrice(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: Number.isInteger(value) ? 0 : 2 }) : '—'; }
-  function moneyNode(value, className) {
-    const result = node('span', className || '');
-    if (!isPrice(value)) { result.textContent = '暂无报价'; return result; }
-    result.append(node('span', 'price-symbol', '¥'), document.createTextNode(currency(value)));
-    return result;
+
+  function directQuote(record, appid) {
+    if (!Array.isArray(record) || record.length < 6 || !validAppId(appid) || Number(record[REC.APPID]) !== Number(appid)) return null;
+    let status = PRICE_STATUSES[record[REC.STATUS]];
+    if (!status) return null;
+    const checkedAt = typeof record[REC.CHECKED] === 'string' && dateValue(record[REC.CHECKED]) ? record[REC.CHECKED] : null;
+    if (!checkedAt && ['ok', 'stale'].includes(status)) status = 'error';
+    const price = Number.isInteger(record[REC.PRICE]) && record[REC.PRICE] >= 0 ? record[REC.PRICE] / 100 : null;
+    const originalPrice = Number.isInteger(record[REC.ORIGINAL]) && record[REC.ORIGINAL] >= 0 ? record[REC.ORIGINAL] / 100 : null;
+    const discount = Number.isInteger(record[REC.DISCOUNT]) && record[REC.DISCOUNT] >= 0 && record[REC.DISCOUNT] <= 100 ? record[REC.DISCOUNT] : null;
+    const usable = status === 'ok' && price !== null;
+    const keepPrice = usable || status === 'stale';
+    return {
+      appid: Number(appid), source: 'steam', dataProvider: 'steam', kind: 'direct', currency: 'CNY',
+      price: keepPrice ? price : null,
+      originalPrice: keepPrice ? originalPrice : null,
+      discount: keepPrice ? discount : null,
+      status,
+      checkedAt,
+      stock: usable ? 'in_stock' : 'unknown',
+      eligible: usable,
+      url: `https://store.steampowered.com/app/${Number(appid)}/?cc=cn&l=schinese`,
+      basicPrice: true
+    };
   }
-  function dateValue(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? null : date; }
-  function formatDate(value, short) {
-    const date = dateValue(value);
-    if (!date) return '尚未更新';
-    return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: short ? undefined : '2-digit', minute: short ? undefined : '2-digit', hour12: false }).format(date);
-  }
-  function timeAgo(value) {
-    const date = dateValue(value);
-    if (!date) return '时间未知';
-    const minutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
-    if (minutes < 1) return '刚刚更新';
-    if (minutes < 60) return `${minutes} 分钟前`;
-    if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
-    return formatDate(value);
-  }
-  function validAppId(value) { if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) return false; const id = Number(value); return Number.isSafeInteger(id) && id > 0 && id <= 2147483647; }
-  function readFavorites() {
-    try { const parsed = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]'); return new Set(Array.isArray(parsed) ? parsed.filter(validAppId).map(Number) : []); } catch (_) { return new Set(); }
-  }
-  function saveFavorites() {
-    try { localStorage.setItem(FAVORITES_KEY, JSON.stringify([...state.favorites])); } catch (_) { toast('浏览器未允许保存关注；可导出清单保留。', true); }
-  }
-  function toast(message, error) {
-    clearTimeout(state.toastTimer);
-    const item = node('div', error ? 'toast error' : 'toast', message);
-    $('toast-region').replaceChildren(item);
-    state.toastTimer = setTimeout(() => $('toast-region').replaceChildren(), 4200);
-  }
-  function imageElement(url, alt, className, fallbackClass) {
-    const source = safeUrl(url);
-    const fallback = () => { const placeholder = node('span', fallbackClass || 'thumbnail-fallback'); placeholder.setAttribute('aria-hidden', 'true'); placeholder.append(icon('store')); if (fallbackClass === 'cover-fallback') placeholder.append(node('span', 'cover-fallback-label', 'Steam 游戏')); return placeholder; };
-    if (!source) return fallback();
-    const img = node('img', className); img.src = source; img.alt = alt; img.loading = 'lazy'; img.decoding = 'async';
-    img.addEventListener('error', () => img.replaceWith(fallback()), { once: true });
-    return img;
-  }
-  function currentGames() {
-    const priced = state.data ? state.data.games.map((game) => mergeDirectPrice(game, state.directEntries.get(Number(game.appid)))) : [];
-    const ids = new Set(priced.map((game) => Number(game.appid)));
-    const options = { favorites: state.favorites, favoritesOnly: state.favoritesOnly };
-    const games = filterGames(priced, state.query, options);
-    // Keep fully collected games first by default, then show basic Steam prices.
-    // Search also includes directory entries without a readable price snapshot.
-    const term = normalizeQuery(state.query);
-    state.catalogEntries.forEach((entry) => {
-      if (ids.has(entry.appid) || (state.favoritesOnly && !state.favorites.has(entry.appid))) return;
-      const game = mergeDirectPrice(entry, state.directEntries.get(entry.appid));
-      if (!term && !state.favoritesOnly && priced.length && !getSteamQuote(game)) return;
-      if (!term || String(game.appid) === term || game.searchText.includes(term)) games.push(game);
-    });
-    return sortGames(games, state.sort, state.provider);
-  }
-  function validateDirectData(data) {
-    if (!data || data.schemaVersion !== 1 || data.source !== 'steam' || data.country !== 'CN' || data.currency !== 'CNY' || !Array.isArray(data.games)) throw new Error('Steam 基础价格快照格式不正确');
-    const seen = new Set();
-    const games = data.games.filter((entry) => {
-      if (!entry || !validAppId(entry.appid) || seen.has(Number(entry.appid))) return false;
-      seen.add(Number(entry.appid)); return true;
-    }).map((entry) => ({ ...entry, appid: Number(entry.appid), price: isPrice(entry.price) ? entry.price : null, originalPrice: isPrice(entry.originalPrice) ? entry.originalPrice : null, status: ['ok', 'unavailable', 'stale', 'error'].includes(entry.status) && (entry.status !== 'ok' || (isPrice(entry.price) && typeof entry.checkedAt === 'string' && Number.isFinite(Date.parse(entry.checkedAt)))) ? entry.status : 'unavailable' }));
-    return { ...data, games };
-  }
-  function directQuote(entry, appid) {
-    if (!entry || !validAppId(appid) || Number(entry.appid) !== Number(appid)) return null;
-    return { ...entry, source: 'steam', dataProvider: 'steam', kind: 'direct', currency: 'CNY', stock: entry.status === 'ok' && isPrice(entry.price) ? 'in_stock' : 'unknown', eligible: entry.status === 'ok' && isPrice(entry.price), url: `https://store.steampowered.com/app/${Number(appid)}/?cc=cn&l=schinese`, basicPrice: true };
-  }
-  function mergeDirectPrice(game, entry) {
-    const quote = directQuote(entry, game.appid);
+  function mergeDirectPrice(game, record) {
+    const quote = directQuote(record, game.appid);
     if (!quote) return game;
     const existing = (game.quotes || []).find((item) => item.source === 'steam' && item.kind === 'direct');
-    if (existing && isUsableQuote(existing) && existing.dataProvider !== 'heybox') return game;
-    // An independent batch may repair only the standard Steam quote; it must not
-    // remove versions, DLC, historical prices, or CDK provenance.
-    if (existing && (!isUsableQuote(quote) || (isPrice(existing.price) && dateValue(existing.checkedAt) && (!dateValue(quote.checkedAt) || dateValue(quote.checkedAt) <= dateValue(existing.checkedAt))))) return game;
+    if (existing && isUsableQuote(existing) && existing.dataProvider !== 'heybox') {
+      const existingTime = dateValue(existing.checkedAt);
+      const quoteTime = dateValue(quote.checkedAt);
+      if (!isUsableQuote(quote) || !existingTime || !quoteTime || existingTime >= quoteTime) return game;
+    }
+    // A price shard may update the standard Steam quote only; detailed quotes,
+    // versions, DLC and history stay untouched.
+    if (existing && !isUsableQuote(quote)) return game;
     return { ...game, quotes: [...(game.quotes || []).filter((item) => !(item.source === 'steam' && item.kind === 'direct')), quote] };
   }
-  async function loadDirectPrices(manual) {
-    if (state.directLoading) return;
-    state.directLoading = true;
-    try {
-      let data;
-      if (window.location.protocol === 'file:' && window.__DIRECT_PRICE_DATA__) data = window.__DIRECT_PRICE_DATA__;
-      else {
-        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含基础现价');
-        const url = new URL('./data/direct-prices.json', window.location.href); if (manual) url.searchParams.set('t', String(Date.now()));
-        const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        data = await response.json();
-      }
-      state.directData = validateDirectData(data);
-      state.directEntries = new Map(state.directData.games.map((entry) => [entry.appid, entry]));
-      state.directStatus = ['error', 'stale', 'unavailable'].includes(data.status) ? 'stale' : 'ok';
-    } catch (_) { state.directStatus = state.directData ? 'stale' : 'unavailable'; }
-    finally { state.directLoading = false; if (state.data) { state.expirySignature = getExpirySignature(); renderOverview(); renderGameList(); } else renderCatalogStatus(); }
+  function leaderRecords(limit) {
+    const leaders = [];
+    state.directEntries.forEach((record) => {
+      if (record[REC.STATUS] !== 0) return;
+      const discount = record[REC.DISCOUNT];
+      if (!(discount > 0) || !(record[REC.PRICE] > 0)) return;
+      leaders.push(record);
+    });
+    leaders.sort((a, b) => b[REC.DISCOUNT] - a[REC.DISCOUNT] || a[REC.PRICE] - b[REC.PRICE]);
+    return leaders.slice(0, limit || 120);
   }
-  function coverageCounts() {
-    const all = new Map(state.catalogEntries.map((game) => [game.appid, game]));
-    if (state.data) state.data.games.forEach((game) => all.set(Number(game.appid), game));
-    let direct = 0;
-    all.forEach((game, appid) => { if (getSteamQuote(mergeDirectPrice(game, state.directEntries.get(appid)))) direct += 1; });
-    return { catalog: all.size, direct, complete: state.data ? state.data.games.length : 0 };
-  }
-  function steamWidgetUrl(appid) { return validAppId(appid) ? `https://store.steampowered.com/widget/${Number(appid)}/?cc=cn&l=schinese` : null; }
+
   function validateCatalog(data) {
-    if (!data || data.schemaVersion !== 1 || !Array.isArray(data.games)) throw new Error('游戏目录格式不正确');
+    if (!data || ![1, 2].includes(data.schemaVersion) || !Array.isArray(data.games)) throw new Error('游戏目录格式不正确');
     const seen = new Set();
-    return { ...data, games: data.games.filter((game) => {
-      if (!game || !validAppId(game.appid) || seen.has(Number(game.appid)) || (game.type && game.type !== 'game')) return false;
-      seen.add(Number(game.appid)); return typeof game.name === 'string' && game.name.trim();
-    }) };
+    const rows = [];
+    data.games.forEach((raw) => {
+      let appid; let name; let nameEn = ''; let aliases = EMPTY_ALIASES;
+      if (Array.isArray(raw)) {
+        appid = Number(raw[0]);
+        name = typeof raw[1] === 'string' ? raw[1].trim() : '';
+        nameEn = typeof raw[2] === 'string' ? raw[2].trim() : '';
+        if (Array.isArray(raw[3])) {
+          const clean = raw[3].filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).slice(0, 12);
+          if (clean.length) aliases = clean;
+        }
+      } else if (raw && typeof raw === 'object') {
+        if (raw.type && raw.type !== 'game') return;
+        appid = Number(raw.appid);
+        name = typeof raw.name === 'string' ? raw.name.trim() : '';
+        nameEn = typeof raw.nameEn === 'string' ? raw.nameEn.trim() : '';
+        if (Array.isArray(raw.aliases)) {
+          const clean = raw.aliases.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim()).slice(0, 12);
+          if (clean.length) aliases = clean;
+        }
+      } else return;
+      if (!validAppId(appid) || seen.has(appid) || !name) return;
+      seen.add(appid);
+      rows.push([appid, name, nameEn, aliases]);
+    });
+    rows.sort((a, b) => a[0] - b[0]);
+    const totalCount = Number.isInteger(data.totalCount) && data.totalCount >= rows.length ? data.totalCount : rows.length;
+    return {
+      schemaVersion: 2,
+      generatedAt: typeof data.generatedAt === 'string' ? data.generatedAt : null,
+      totalCount,
+      complete: data.complete === true || totalCount <= rows.length,
+      status: typeof data.status === 'string' ? data.status : null,
+      rows
+    };
+  }
+  function catalogRow(appid) {
+    const id = Number(appid);
+    if (!validAppId(id)) return null;
+    let low = 0; let high = state.catalogRows.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const row = state.catalogRows[mid];
+      if (row[0] === id) return row;
+      if (row[0] < id) low = mid + 1; else high = mid - 1;
+    }
+    return null;
+  }
+  function catalogGame(row) {
+    return { appid: row[0], name: row[1], nameEn: row[2], aliases: row[3], catalogOnly: true, quotes: [], history: [] };
+  }
+  function materializeRow(row) {
+    const detail = state.detailGames.get(row[0]);
+    return mergeDirectPrice(detail || catalogGame(row), state.directEntries.get(row[0]));
+  }
+  function detailRow(game) {
+    return [Number(game.appid), String(game.name || game.nameEn || `App ${game.appid}`), String(game.nameEn || ''), Array.isArray(game.aliases) ? game.aliases : EMPTY_ALIASES];
+  }
+  function rankFields(fields, term, fold) {
+    let rank = -1;
+    for (const value of fields) {
+      if (typeof value !== 'string' || !value) continue;
+      const folded = fold(value);
+      if (folded === term) return 1;
+      if (folded.startsWith(term)) rank = rank < 0 || rank > 2 ? 2 : rank;
+      else if (folded.includes(term) && rank < 0) rank = 4;
+    }
+    return rank;
+  }
+  function searchCatalog(value) {
+    const term = normalizeQuery(value);
+    if (!term) return { rows: [], truncated: false, total: 0 };
+    const ascii = /[a-z]/i.test(term);
+    const fold = ascii ? (text) => text.toLowerCase() : (text) => text;
+    const idTerm = /^\d+$/.test(term) ? Number(term) : null;
+    const buckets = [[], [], [], [], []];
+    let matched = 0;
+    const consider = (row) => {
+      let rank = -1;
+      if (idTerm !== null && row[0] === idTerm) rank = 0;
+      else rank = rankFields([row[1], row[2], ...row[3]], term, fold);
+      if (rank < 0) return;
+      matched += 1;
+      if (buckets[rank].length < SEARCH_BUFFER) buckets[rank].push(row);
+    };
+    state.catalogRows.forEach(consider);
+    state.detailList.forEach((game) => {
+      const id = Number(game.appid);
+      if (catalogRow(id)) return;
+      consider(detailRow(game));
+    });
+    const rows = buckets.flat().slice(0, MAX_SEARCH_RESULTS);
+    return { rows, truncated: matched > rows.length, total: matched };
+  }
+
+  function validateData(data) {
+    if (!data || data.schemaVersion !== 1 || !Array.isArray(data.games)) throw new Error('价格快照格式不正确');
+    const seen = new Set();
+    const games = data.games.filter((game) => {
+      if (!game || !validAppId(game.appid) || seen.has(Number(game.appid))) return false;
+      seen.add(Number(game.appid)); return true;
+    }).map((game) => ({ ...game, appid: Number(game.appid), quotes: Array.isArray(game.quotes) ? game.quotes : [], history: Array.isArray(game.history) ? game.history : [] }));
+    return { ...data, games };
+  }
+  function validatePriceManifest(data) {
+    if (!data || data.schemaVersion !== 2 || data.source !== 'steam' || data.country !== 'CN' || data.currency !== 'CNY') throw new Error('Steam 现价清单格式不正确');
+    const shardCount = Number(data.shardCount);
+    if (!Number.isInteger(shardCount) || shardCount < 1 || shardCount > 1000) throw new Error('现价分片数量不正确');
+    if (!Array.isArray(data.shards) || data.shards.length !== shardCount) throw new Error('现价分片清单不完整');
+    const shards = data.shards.map((entry, index) => {
+      if (!entry || Number(entry.index) !== index || !SHARD_PATH.test(String(entry.file))) throw new Error('现价分片路径不正确');
+      const available = entry.available === true;
+      const count = available && Number.isInteger(entry.count) && entry.count >= 0 ? entry.count : 0;
+      return {
+        file: String(entry.file), index, count,
+        priced: available && Number.isInteger(entry.priced) && entry.priced >= 0 ? entry.priced : 0,
+        checkedAt: available && typeof entry.checkedAt === 'string' && dateValue(entry.checkedAt) ? entry.checkedAt : null,
+        available
+      };
+    });
+    const refreshMinutes = Number(data.refreshMinutes) >= 1 ? Number(data.refreshMinutes) : DEFAULT_PRICE_REFRESH_MINUTES;
+    return {
+      schemaVersion: 2,
+      generatedAt: typeof data.generatedAt === 'string' ? data.generatedAt : null,
+      checkedAt: typeof data.checkedAt === 'string' && dateValue(data.checkedAt) ? data.checkedAt : null,
+      status: typeof data.status === 'string' ? data.status : null,
+      refreshMinutes,
+      shardCount,
+      shards,
+      gameCount: Number(data.gameCount) || 0,
+      catalogGameCount: Number(data.catalogGameCount) || 0,
+      pricedCount: Number(data.pricedCount) || 0,
+      missingCount: Number(data.missingCount) || 0,
+      availableShardCount: shards.filter((shard) => shard.available).length
+    };
+  }
+  function validatePriceShard(data, index, shardCount) {
+    if (!data || data.schemaVersion !== 2 || data.shard !== index || data.shardCount !== shardCount || !Array.isArray(data.games)) throw new Error('现价分片格式不正确');
+    const shardChecked = typeof data.checkedAt === 'string' && dateValue(data.checkedAt) ? data.checkedAt : null;
+    if (!shardChecked) throw new Error('现价分片缺少检查时间');
+    const seen = new Set();
+    const records = [];
+    data.games.forEach((row) => {
+      if (!Array.isArray(row) || row.length < 5 || row.length > 6) return;
+      const appid = Number(row[0]);
+      if (!validAppId(appid) || appid % shardCount !== index || seen.has(appid)) return;
+      const statusName = PRICE_STATUSES[row[4]];
+      if (!statusName) return;
+      const checkedAt = row.length > 5 ? row[5] : shardChecked;
+      if (checkedAt !== null && (typeof checkedAt !== 'string' || !dateValue(checkedAt))) return;
+      let price = Number.isInteger(row[1]) && row[1] >= 0 ? row[1] : null;
+      let original = Number.isInteger(row[2]) && row[2] >= 0 ? row[2] : null;
+      let discount = Number.isInteger(row[3]) && row[3] >= 0 && row[3] <= 100 ? row[3] : null;
+      let status = statusName;
+      if (checkedAt === null && ['ok', 'stale'].includes(status)) status = 'error';
+      if (status === 'ok' && price === null) status = 'unavailable';
+      if (status === 'stale' && price === null) status = 'error';
+      if (status === 'unavailable' || status === 'error') { price = null; original = null; discount = null; }
+      seen.add(appid);
+      records.push([appid, price, original, discount, PRICE_STATUSES.indexOf(status), checkedAt]);
+    });
+    return records;
+  }
+
+  async function fetchJson(url) {
+    const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
   }
   async function loadCatalog(manual) {
     if (state.catalogLoading) return;
@@ -233,29 +425,250 @@
       let data;
       if (window.location.protocol === 'file:' && window.__CATALOG_DATA__) data = window.__CATALOG_DATA__;
       else {
-        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含目录');
-        const url = new URL('./data/catalog-index.json', window.location.href); if (manual) url.searchParams.set('t', String(Date.now()));
-        const response = await fetch(url, { cache: 'no-cache', credentials: 'omit' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        data = await response.json();
+        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含全库目录');
+        const url = new URL('./data/catalog-index.json', window.location.href);
+        if (manual) url.searchParams.set('t', String(Date.now()));
+        data = await fetchJson(url);
       }
       state.catalog = validateCatalog(data);
-      state.catalogEntries = state.catalog.games.map((game) => ({ ...game, appid: Number(game.appid), catalogOnly: true, quotes: [], history: [], searchText: [game.name, game.nameEn, ...(Array.isArray(game.aliases) ? game.aliases : [])].filter((text) => typeof text === 'string').join('\n').toLocaleLowerCase('zh-CN') }));
-      state.catalogStatus = ['error', 'stale', 'unavailable'].includes(data.status) ? 'stale' : 'ok';
-    } catch (_) { state.catalogStatus = state.catalog ? 'stale' : 'unavailable'; }
-    finally {
+      state.catalogRows = state.catalog.rows;
+      state.catalogStatus = ['error', 'stale', 'unavailable'].includes(state.catalog.status) ? 'stale' : 'ok';
+      state.featuredCache = null;
+    } catch (_) {
+      state.catalogStatus = state.catalogRows.length ? 'stale' : 'unavailable';
+    } finally {
       state.catalogLoading = false;
-      if (state.data) { renderOverview(); renderGameList(); }
+      if (state.catalogRows.length || state.data) renderGameList();
+      else renderCatalogStatus();
+      renderOverview();
+    }
+  }
+  function scheduleProgress() {
+    if (state.progressTimer) return;
+    state.progressTimer = setTimeout(() => {
+      state.progressTimer = null;
+      if (state.directLoading) renderOverview();
+      else renderCatalogStatus();
+    }, 300);
+  }
+  async function loadDirectPrices(manual) {
+    if (state.directLoading) return;
+    state.directLoading = true;
+    state.priceShardsLoaded = 0;
+    state.priceShardErrors = 0;
+    state.pricePriced = 0;
+    state.priceShardsTotal = 0;
+    state.priceMissingShards = 0;
+    state.directStatus = 'loading';
+    try {
+      let manifest;
+      if (window.location.protocol === 'file:' && window.__PRICE_MANIFEST__) manifest = window.__PRICE_MANIFEST__;
+      else {
+        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含全库现价');
+        const url = new URL('./data/price-manifest.json', window.location.href);
+        if (manual) url.searchParams.set('t', String(Date.now()));
+        manifest = await fetchJson(url);
+      }
+      state.priceManifest = validatePriceManifest(manifest);
+      state.priceRefreshMinutes = state.priceManifest.refreshMinutes;
+      state.priceShardCount = state.priceManifest.shardCount;
+      const shards = state.priceManifest.shards.filter((entry) => entry.available);
+      state.priceShardsTotal = shards.length;
+      state.priceMissingShards = state.priceManifest.shards.length - shards.length;
+      if (!shards.length) {
+        state.directEntries = new Map();
+        throw new Error('没有可用的现价分片');
+      }
+      const nextEntries = new Map();
+      const failedShards = new Set();
+      await mapLimit(shards, 6, async (entry) => {
+        try {
+          let payload;
+          if (window.location.protocol === 'file:') {
+            payload = window.__PRICE_SHARDS__ && window.__PRICE_SHARDS__[entry.file];
+            if (!payload) throw new Error('现价分片未嵌入');
+          } else {
+            const url = new URL(`./data/${entry.file}`, window.location.href);
+            if (manual) url.searchParams.set('t', String(Date.now()));
+            payload = await fetchJson(url);
+          }
+          const records = validatePriceShard(payload, entry.index, state.priceShardCount);
+          records.forEach((record) => {
+            nextEntries.set(record[REC.APPID], record);
+            if (record[REC.STATUS] === 0) state.pricePriced += 1;
+          });
+          state.priceShardsLoaded += 1;
+        } catch (_) {
+          state.priceShardErrors += 1;
+          failedShards.add(entry.index);
+        } finally {
+          scheduleProgress();
+        }
+      });
+      // Replace successful shards, including deleted rows. A failed download
+      // may retain its last snapshot, with every original check time intact.
+      if (failedShards.size) state.directEntries.forEach((record, appid) => {
+        if (failedShards.has(appid % state.priceShardCount)) {
+          nextEntries.set(appid, record);
+          if (record[REC.STATUS] === 0) state.pricePriced += 1;
+        }
+      });
+      state.directEntries = nextEntries;
+      const manifestTime = state.priceManifest.checkedAt || state.priceManifest.generatedAt;
+      const expired = isQuoteExpired({ checkedAt: manifestTime, status: 'ok', basicPrice: true }, Date.now(), state.priceRefreshMinutes);
+      const usableShards = shards.length - state.priceShardErrors;
+      if (!usableShards) state.directStatus = 'unavailable';
+      else if (expired || state.priceShardErrors > 0 || state.priceMissingShards > 0) state.directStatus = 'stale';
+      else state.directStatus = 'ok';
+      state.directStats = { loadedAt: Date.now(), priced: state.pricePriced, errors: state.priceShardErrors };
+    } catch (_) {
+      state.directStatus = state.directEntries.size ? 'stale' : 'unavailable';
+      state.directStats = { loadedAt: Date.now(), priced: state.pricePriced, errors: state.priceShardErrors };
+    } finally {
+      state.directLoading = false;
+      clearTimeout(state.progressTimer);
+      state.progressTimer = null;
+      state.priceVersion += 1;
+      state.featuredCache = null;
+      renderOverview();
+      if (state.data || state.catalogRows.length) renderGameList();
       else renderCatalogStatus();
     }
   }
+  async function loadData(manual) {
+    if (state.loading) return;
+    state.loading = true; const button = $('refresh-button'); button.classList.add('is-loading'); button.disabled = true;
+    try {
+      let data;
+      if (window.location.protocol === 'file:' && window.PRICE_RADAR_BOOTSTRAP) {
+        data = window.PRICE_RADAR_BOOTSTRAP;
+        if (manual) toast('这是本地采集快照；更新价格请运行采集脚本，再生成预览。');
+      } else {
+        if (window.location.protocol === 'file:') throw new Error('本地预览尚未包含详情快照');
+        const url = new URL('./data/prices.json', window.location.href);
+        if (manual) url.searchParams.set('t', String(Date.now()));
+        data = await fetchJson(url);
+        if (manual) toast('已重新读取发布的快照，未即时查询商家接口。');
+      }
+      state.data = validateData(data);
+      state.detailList = state.data.games;
+      state.detailGames = new Map(state.detailList.map((game) => [Number(game.appid), game]));
+      state.detailStatus = 'ok';
+      state.featuredCache = null;
+      state.expirySignature = getExpirySignature();
+      renderOverview();
+      renderGameList();
+    } catch (error) {
+      state.detailStatus = 'unavailable';
+      if (state.catalogRows.length || state.directEntries.size || state.data) {
+        if (manual) toast(`详情快照读取失败：${error.message}`, true);
+        renderOverview();
+        if (state.catalogRows.length) renderGameList();
+      } else {
+        renderFatal(error);
+      }
+    } finally { state.loading = false; button.classList.remove('is-loading'); button.disabled = false; }
+  }
+  function renderFatal(error) {
+    $('snapshot-label').textContent = '价格快照读取失败';
+    $('snapshot-time').textContent = window.location.protocol === 'file:' ? '请打开“打开预览.html”或通过本地服务访问' : '检查网络或价格数据文件后重试';
+    $('snapshot-dot').className = 'status-dot error';
+    const empty = node('div', 'empty-state'); const symbol = node('span', 'empty-icon'); symbol.append(icon('alert'));
+    empty.append(symbol, node('h3', '', '暂时无法载入价格'), node('p', '', window.location.protocol === 'file:' ? '浏览器限制直接读取本地 JSON。请打开自包含预览文件，或通过本地 HTTP 服务访问网站。' : '未能读取已发布的价格数据。没有用模拟报价代替真实数据。'));
+    const links = node('div', 'empty-links');
+    const retry = node('button', 'button button-secondary', '重新读取'); retry.type = 'button'; retry.addEventListener('click', () => { loadData(true); loadCatalog(true); loadDirectPrices(true); }); links.append(retry);
+    empty.append(links); $('game-list').replaceChildren(empty); $('game-list').setAttribute('aria-busy', 'false'); $('source-statuses').replaceChildren(node('span', '', '价格快照不可用')); renderDetail(null);
+    if (error) toast(`读取失败：${error.message}`, true);
+  }
+
+  function coverageCounts() {
+    return {
+      catalog: state.catalogRows.length,
+      target: state.catalog ? state.catalog.totalCount : 0,
+      direct: state.pricePriced,
+      complete: state.detailList.length
+    };
+  }
+  function featuredGames() {
+    if (state.featuredCache && state.featuredCache.version === state.priceVersion) return state.featuredCache.games;
+    const result = state.detailList.map((game) => mergeDirectPrice(game, state.directEntries.get(Number(game.appid))));
+    const seen = new Set(result.map((game) => Number(game.appid)));
+    let leaders = 0;
+    leaderRecords(120).forEach((record) => {
+      const appid = Number(record[REC.APPID]);
+      if (seen.has(appid)) return;
+      const row = catalogRow(appid);
+      if (!row) return;
+      seen.add(appid);
+      result.push(mergeDirectPrice(catalogGame(row), record));
+      leaders += 1;
+    });
+    state.featuredLeaders = leaders;
+    if (!result.length) {
+      state.catalogRows.slice(0, 30).forEach((row) => {
+        if (seen.has(row[0])) return;
+        seen.add(row[0]);
+        result.push(mergeDirectPrice(catalogGame(row), state.directEntries.get(row[0])));
+      });
+    }
+    state.featuredCache = { version: state.priceVersion, games: result };
+    return result;
+  }
+  function favoriteGames() {
+    const games = [];
+    const seen = new Set();
+    state.favorites.forEach((id) => {
+      const detail = state.detailGames.get(id);
+      if (detail) {
+        seen.add(id);
+        games.push(mergeDirectPrice(detail, state.directEntries.get(id)));
+        return;
+      }
+      const row = catalogRow(id);
+      if (row) {
+        seen.add(id);
+        games.push(mergeDirectPrice(catalogGame(row), state.directEntries.get(id)));
+      }
+    });
+    state.favorites.forEach((id) => {
+      if (seen.has(id)) return;
+      games.push(mergeDirectPrice({ appid: id, name: `Steam App ${id}`, nameEn: '', aliases: EMPTY_ALIASES, catalogOnly: true, quotes: [], history: [] }, state.directEntries.get(id)));
+    });
+    return sortGames(games, state.sort, state.provider);
+  }
+  function currentGames() {
+    const term = normalizeQuery(state.query);
+    state.searchTruncated = false;
+    if (term) {
+      const result = searchCatalog(term);
+      state.searchTruncated = result.truncated;
+      let games = result.rows.map(materializeRow);
+      if (state.favoritesOnly) games = games.filter((game) => state.favorites.has(Number(game.appid)));
+      return sortGames(games, state.sort, state.provider);
+    }
+    if (state.favoritesOnly) return favoriteGames();
+    return sortGames(featuredGames(), state.sort, state.provider);
+  }
+
   function renderCatalogStatus() {
-    const count = state.catalogEntries.length;
-    const coverage = coverageCounts();
     const status = $('catalog-status');
-    status.textContent = count ? `${coverage.catalog.toLocaleString('zh-CN')} 款目录 · ${coverage.direct.toLocaleString('zh-CN')} 款有有效 Steam 现价 · ${coverage.complete} 款已采集详情${state.catalogStatus === 'stale' ? ' · 目录缓存' : state.catalog && state.catalog.complete === false ? ' · 目录正在补全' : ''}。输入名称或 AppID 搜索。` : state.catalogStatus === 'loading' ? '正在载入 Steam 游戏目录…' : `目前可搜索 ${coverage.complete} 款详情已收录游戏，同步目录暂不可用。`;
-    if (state.directStatus === 'unavailable') status.textContent += ' 基础现价暂未载入，可打开游戏查看 Steam 官方价格组件。';
-    else if (state.directStatus === 'stale') status.textContent += ' 基础现价同步暂受影响；过期报价已排除。';
+    const counts = coverageCounts();
+    const rows = counts.catalog;
+    let text;
+    if (rows) {
+      const parts = [`可搜索 ${rows.toLocaleString('zh-CN')} 款 Steam 游戏`];
+      if (counts.target > rows) parts.push(`全库目标约 ${counts.target.toLocaleString('zh-CN')} 款，目录持续补全`);
+      if (state.priceShardsTotal) parts.push(`现价分片 ${state.priceShardsLoaded}/${state.priceShardsTotal}`);
+      else if (state.directStatus === 'loading') parts.push('现价读取中');
+      text = parts.join(' · ');
+      if (!state.query.trim() && !state.favoritesOnly && state.featuredLeaders) text += ` · 默认展示已采集详情与 ${state.featuredLeaders} 款折扣榜，搜索可覆盖全库`;
+    } else if (state.catalogStatus === 'loading') text = '正在载入 Steam 全库目录…';
+    else text = `全库目录暂不可用；目前可搜索 ${counts.complete.toLocaleString('zh-CN')} 款已采集详情游戏。`;
+    if (state.searchTruncated) text += ` · 匹配超过 ${MAX_SEARCH_RESULTS.toLocaleString('zh-CN')} 款，仅显示前 ${MAX_SEARCH_RESULTS.toLocaleString('zh-CN')} 款，请补充关键词或输入 AppID`;
+    if (state.catalogStatus === 'stale') text += ' · 目录为缓存版本';
+    if (state.directStatus === 'unavailable') text += ' · 全库现价暂未载入，可查看 Steam 官方价';
+    else if (state.directStatus === 'stale') text += ' · 部分现价分片不可用或快照已过期，过期报价已排除';
+    status.textContent = text;
     if (state.catalog && state.catalog.generatedAt) status.title = `目录同步于 ${formatDate(state.catalog.generatedAt)}（北京时间）。目录收录不代表已经取得价格。`;
   }
   function renderNav() {
@@ -270,7 +683,7 @@
     renderNav();
     const games = currentGames();
     const visible = games.slice(0, state.visibleLimit);
-    $('visible-count').textContent = `${games.length.toLocaleString('zh-CN')} 款`;
+    $('visible-count').textContent = ` · ${games.length.toLocaleString('zh-CN')}${state.searchTruncated ? '+' : ''} 款`;
     const more = $('catalog-more'); more.hidden = games.length <= visible.length;
     more.textContent = `再显示 ${Math.min(PAGE_SIZE, games.length - visible.length)} 款（已显示 ${visible.length} 款）`;
     renderCatalogStatus();
@@ -284,17 +697,18 @@
       row.setAttribute('aria-label', `查看 ${game.name || game.nameEn || game.appid} 的价格详情`);
       row.dataset.appid = game.appid;
       const info = node('span', 'game-info');
-      info.append(imageElement(game.image, '', 'game-thumbnail'));
+      info.append(imageElement(game.image || (validAppId(game.appid) ? `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${Number(game.appid)}/header.jpg` : null), '', 'game-thumbnail'));
       const copy = node('span', 'game-copy');
       const name = node('span', 'game-name', game.name || game.nameEn || `App ${game.appid}`);
       if (state.favorites.has(Number(game.appid))) { const marker = node('span', 'favorite-marker', '★'); marker.setAttribute('aria-label', '已关注'); name.append(marker); }
-      copy.append(name, node('span', 'game-subtitle', game.nameEn || `Steam AppID ${game.appid}`), node('span', 'game-version', game.catalogOnly ? getSteamQuote(game) ? 'Steam 现价 · 详情待补全' : '目录收录 · 官方查价' : game.edition || '标准版'));
+      const subtitle = game.nameEn && game.nameEn !== game.name ? game.nameEn : `Steam AppID ${game.appid}`;
+      copy.append(name, node('span', 'game-subtitle', subtitle), node('span', 'game-version', game.catalogOnly ? getSteamQuote(game) ? 'Steam 现价 · 详情待补全' : '目录收录 · 官方查价' : game.edition || '标准版'));
       info.append(copy); row.append(info);
       const steam = getSteamQuote(game); const cdk = getCdkQuote(game, state.provider);
       const directPrice = node('span', `row-price${steam ? '' : ' is-missing'}`);
       directPrice.append(steam ? moneyNode(steam.price) : document.createTextNode('—'));
       const oldSteam = (game.quotes || []).some((quote) => quote.source === 'steam' && quote.kind === 'direct' && effectiveStatus(quote) === 'stale');
-      directPrice.append(node('small', '', steam ? steam.dataProvider === 'heybox' ? '小黑盒 · 参考' : steam.price === 0 ? '免费游戏' : 'Steam 国区' : oldSteam ? '快照已过期' : game.catalogOnly ? '尚未采价' : '暂不可用'));
+      directPrice.append(node('small', '', steam ? steam.dataProvider === 'heybox' ? '小黑盒 · 参考' : steam.price === 0 ? '免费游戏' : 'Steam 国区' : oldSteam ? '快照已过期' : game.catalogOnly ? state.directLoading ? '现价读取中' : '尚未采价' : '暂不可用'));
       const cdkPrice = node('span', `row-price cdk-price${cdk ? '' : ' is-missing'}`);
       cdkPrice.append(cdk ? moneyNode(cdk.price) : document.createTextNode('—'));
       const oldCdk = (game.quotes || []).some((quote) => quote.kind === 'cdk' && (state.provider === 'all' || quote.source === state.provider) && effectiveStatus(quote) === 'stale');
@@ -313,8 +727,8 @@
   function renderEmpty(container) {
     const empty = node('div', 'empty-state'); const emptyIcon = node('span', 'empty-icon'); emptyIcon.append(icon(state.favoritesOnly ? 'star' : 'search'));
     const hasQuery = Boolean(state.query.trim());
-    empty.append(emptyIcon, node('h3', '', hasQuery ? '这款游戏暂未收录' : state.favoritesOnly ? '还没有可显示的关注' : '还没有价格快照'));
-    empty.append(node('p', '', hasQuery ? `没有找到“${state.query.trim()}”。可尝试英文名或 AppID；目录同步和价格采集会持续补充。` : state.favoritesOnly ? '在游戏详情中点亮星标即可关注。已导入但尚未收录的 AppID，会在目录同步后显示。' : '价格采集完成后，真实报价会显示在这里。'));
+    empty.append(emptyIcon, node('h3', '', hasQuery ? '全库中暂未找到' : state.favoritesOnly ? '还没有可显示的关注' : '还没有价格快照'));
+    empty.append(node('p', '', hasQuery ? `没有找到“${state.query.trim()}”。全库目录仍在持续补全，可尝试英文名、AppID 或直接打开 Steam 搜索。` : state.favoritesOnly ? '在游戏详情中点亮星标即可关注；已导入的关注会在这里显示。' : '全库目录或价格分片尚未载入，请稍后重试。'));
     const links = node('div', 'empty-links');
     if (hasQuery) {
       const term = normalizeQuery(state.query);
@@ -332,7 +746,7 @@
     if (quote) card.append(moneyNode(quote.price, 'price-number'));
     else card.append(node('div', 'price-number no-price', '暂无报价'));
     const available = isPurchasable(quote);
-    let note = isCdk ? quote ? available ? '已确认在售 · 可购报价' : '参考报价 · 库存未确认' : '三家平台暂无有效报价' : quote ? quote.price === 0 ? '免费游戏 · Steam 国区' : '官方商店 · 当前售价' : '暂无有效报价 · 请打开商店核对';
+    let note = isCdk ? quote ? available ? '已确认在售 · 可购报价' : '参考报价 · 库存未确认' : '三家平台暂无有效报价' : quote ? quote.price === 0 ? '免费游戏 · Steam 国区' : quote.basicPrice ? 'Steam 国区 · 全库价格快照' : '官方商店 · 当前售价' : '暂无有效报价 · 请打开商店核对';
     if (quote && window.location.protocol === 'file:') note = isCdk ? '采集时参考 · 请核对库存/地区' : '采集时快照 · 不保证当前价';
     if (!isCdk && quote && quote.dataProvider === 'heybox') note = window.location.protocol === 'file:' ? '采集时小黑盒参考 · 非当前价' : '小黑盒国区参考 · 未核验当前价';
     if (isCdk && state.provider !== 'all' && !quote) note = `${PROVIDERS[state.provider]}暂无有效报价`;
@@ -618,10 +1032,10 @@
   function renderBasicDetail(game, steam, content, steamUrl) {
     if (steam) {
       const cards = node('div', 'price-cards basic-price-cards'); cards.append(priceCard('Steam 国区本体现价', steam, 'direct')); content.append(cards);
-      const coverage = node('section', 'basic-coverage'); coverage.append(icon('info'), node('div', '', 'Steam 现价已采集，CDK / 版本 / DLC / 历史待补全。'));
+      const coverage = node('section', 'basic-coverage'); coverage.append(icon('info'), node('div', '', '这款游戏的 Steam 国区价格已采集；CDK / 版本 / DLC / 历史仍在分批补全。'));
       content.append(coverage);
     } else {
-      const notice = node('div', 'basic-coverage'); notice.append(icon('clock'), node('div', '', '本站价格正在分批补充，可先通过下方官方组件查看 Steam 现价。版本、DLC、CDK 和历史数据尚未采集。')); content.append(notice, createSteamWidget(game));
+      const notice = node('div', 'basic-coverage'); notice.append(icon('clock'), node('div', '', '这款游戏暂无有效的 Steam 国区现价，可先通过下方官方组件查看。版本、DLC、CDK 和历史数据尚未采集。')); content.append(notice, createSteamWidget(game));
       const previous = (game.quotes || []).find((quote) => quote.source === 'steam' && quote.kind === 'direct');
       if (previous && previous.checkedAt) content.append(node('p', 'basic-checked-time', `最近检查 ${formatDate(previous.checkedAt)}（北京时间）· ${effectiveStatus(previous) === 'stale' ? '本站报价已过期，已从现价和排序中排除' : previous.note || '尚未取得有效的国区人民币现价'}`));
     }
@@ -633,7 +1047,7 @@
     const container = $('game-detail'); container.replaceChildren();
     if (!game) {
       const placeholder = node('div', 'detail-placeholder'); const radar = node('span', 'placeholder-radar'); radar.setAttribute('aria-hidden', 'true'); radar.append(node('span'));
-      placeholder.append(radar, node('h2', '', state.query ? '发现更多游戏' : '下一份好价，值得关注'), node('p', '', state.query ? '搜索已收录游戏，查看对应版本的直售和 CDK 报价。' : '选择一款游戏，查看各平台价格与库存状态。')); container.append(placeholder); return;
+      placeholder.append(radar, node('h2', '', state.query ? '发现更多游戏' : '下一份好价，值得关注'), node('p', '', state.query ? '全库搜索已覆盖 Steam 游戏目录，选择一款查看 Steam 现价。' : '选择一款游戏，查看各平台价格与库存状态。')); container.append(placeholder); return;
     }
     const current = selectedContent(game);
     const steam = getSteamQuote(current); const cdk = getCdkQuote(current, state.provider);
@@ -654,7 +1068,7 @@
     content.append(createContentSelector(game, current));
     const context = node('div', 'selected-content-heading'); context.append(node('span', '', current.kind === 'dlc' ? '当前附加内容' : '当前版本'), node('h3', '', current.nameZh || current.name)); content.append(context);
     const cards = node('div', 'price-cards'); cards.append(priceCard('Steam 国区直售价', steam, 'direct'), priceCard(state.provider === 'all' ? '最低 CDK 报价' : `${PROVIDERS[state.provider]} CDK 报价`, cdk, 'cdk')); content.append(cards);
-    if (current.isStandard && steam && steam.basicPrice) content.append(node('p', 'basic-coverage', '当前为 Steam 商店本体现价概览；具体购买包请在版本列表中核对。'));
+    if (current.isStandard && steam && steam.basicPrice) content.append(node('p', 'basic-coverage', '当前为 Steam 全库价格快照中的本体现价；具体购买包请在版本列表中核对。'));
     if (current.isStandard) content.append(createSteamHistory(game, false));
     else {
       const scope = node('div', 'content-history-note'); scope.append(icon('chart'), node('span', '', '所选内容暂未收录历史走势。'));
@@ -670,38 +1084,73 @@
     content.append(actions, node('p', 'disclaimer', '跳转至对应商家 · 购买前请核对激活地区、版本及最终价格')); container.append(content);
   }
   function renderOverview() {
-    const data = state.data;
-    const coverage = coverageCounts();
-    $('game-count').textContent = coverage.catalog.toLocaleString('zh-CN');
-    $('catalog-coverage').textContent = '可搜索游戏目录';
-    $('direct-price-count').textContent = coverage.direct.toLocaleString('zh-CN');
-    $('complete-price-count').textContent = coverage.complete.toLocaleString('zh-CN');
+    const counts = coverageCounts();
+    $('game-count').textContent = counts.catalog.toLocaleString('zh-CN');
+    $('catalog-coverage').textContent = counts.target > counts.catalog ? counts.target >= 10000 ? `已收录 / 全库约 ${(counts.target / 10000).toFixed(1)} 万` : `已收录 / 全库 ${counts.target.toLocaleString('zh-CN')}` : 'Steam 全库可搜索';
+    $('direct-price-count').textContent = counts.direct.toLocaleString('zh-CN');
+    $('complete-price-count').textContent = counts.complete.toLocaleString('zh-CN');
     const directTime = $('direct-price-time');
-    directTime.textContent = state.directData && state.directData.generatedAt ? `基础现价批次：${formatDate(state.directData.generatedAt)} · 每条报价保留实际检查时间${state.directStatus === 'stale' ? ' · 同步受影响' : ''}` : state.directStatus === 'loading' ? '正在读取基础现价…' : '基础现价暂未载入；未覆盖游戏可查看 Steam 官方组件。';
-    directTime.title = '基础现价分批更新；有效现价数包含完整比价游戏。版本、CDK 和历史数据另行采集。';
+    if (state.directStatus === 'loading') {
+      directTime.textContent = state.priceShardsTotal ? `正在载入 Steam 报价快照：分片 ${state.priceShardsLoaded}/${state.priceShardsTotal}，已读取 ${state.pricePriced.toLocaleString('zh-CN')} 条…` : '正在读取 Steam 报价快照清单…';
+    } else if (state.priceManifest) {
+      const manifest = state.priceManifest;
+      const checked = manifest.checkedAt || manifest.generatedAt;
+      let text = `Steam 报价记录 ${manifest.pricedCount.toLocaleString('zh-CN')} 条 / 目录 ${manifest.catalogGameCount.toLocaleString('zh-CN')} 款 · 快照 ${formatDate(checked)} · 计划每 ${formatRefresh(manifest.refreshMinutes)}更新`;
+      if (state.priceMissingShards) text += ` · ${state.priceMissingShards} 个分片尚未发布`;
+      if (state.priceShardErrors) text += ` · ${state.priceShardErrors} 个分片读取失败`;
+      if (state.directStatus === 'stale') text += ' · 部分分片不可用或快照已过期，过期报价已排除';
+      directTime.textContent = text;
+      directTime.title = `Steam 中国大陆商店报价快照记录，数量包含已过期记录；过期报价不参与现价与排序，未返回价格不等于免费。分片 ${manifest.availableShardCount}/${manifest.shardCount} 可用。`;
+    } else {
+      directTime.textContent = state.directStatus === 'unavailable' ? 'Steam 报价快照暂未载入；仍可搜索目录并打开官方价格组件。' : '正在读取 Steam 报价快照…';
+      directTime.title = 'Steam 中国大陆商店报价快照；过期价格不参与现价与排序。';
+    }
     renderCatalogStatus();
-    const generated = dateValue(data.generatedAt); const minutes = generated ? Math.max(0, (Date.now() - generated.getTime()) / 60000) : Infinity;
-    const old = minutes > Math.max(60, (Number(data.refreshMinutes) || 15) * 4);
-    $('snapshot-dot').className = `status-dot${old ? ' warning' : ''}`;
-    $('snapshot-label').textContent = window.location.protocol === 'file:' ? '详情 · 本地采集快照' : old ? '详情快照已过期' : '详情快照已同步';
-    $('snapshot-time').textContent = `${formatDate(data.generatedAt)} · ${window.location.protocol === 'file:' ? '本地预览快照' : `计划每 ${Number(data.refreshMinutes) || 15} 分钟更新`}`;
-    $('snapshot-time').title = '北京时间（UTC+8）。定时采集可能因调度或商家接口延迟。';
+    const data = state.data;
+    if (!data) {
+      $('snapshot-dot').className = 'status-dot warning';
+      $('snapshot-label').textContent = '详情快照暂未载入';
+      $('snapshot-time').textContent = state.directStatus === 'loading' ? '正在载入全库 Steam 现价…' : '全库目录仍可搜索';
+      $('snapshot-time').title = '价格详情快照由每 15 分钟运行的轮换采集任务发布，每轮补采 20 款目录游戏。';
+    } else {
+      const detailExpired = isQuoteExpired({ checkedAt: data.generatedAt, status: 'ok' }, Date.now(), Number(data.refreshMinutes) || DEFAULT_DETAIL_REFRESH_MINUTES);
+      $('snapshot-dot').className = `status-dot${detailExpired ? ' warning' : ''}`;
+      $('snapshot-label').textContent = window.location.protocol === 'file:' ? '详情 · 本地采集快照' : detailExpired ? '详情快照已过期' : '详情快照已同步';
+      $('snapshot-time').textContent = `${formatDate(data.generatedAt)} · 详情每 ${formatRefresh(Number(data.refreshMinutes) || DEFAULT_DETAIL_REFRESH_MINUTES)}更新`;
+      $('snapshot-time').title = '北京时间（UTC+8）。详情含版本、DLC、CDK 与历史；全库基础现价由价格分片单独更新。';
+    }
+    renderSources();
+  }
+  function renderSources() {
     const statuses = $('source-statuses'); statuses.replaceChildren();
     ['steam', ...CDK_PROVIDERS].forEach((source) => {
-      const info = (data.sources || []).find((item) => item.id === source);
-      const sourceExpired = info && isQuoteExpired({ checkedAt: info.checkedAt });
-      const healthy = info && ['ok', 'partial'].includes(info.status) && !sourceExpired;
-      const item = node('span', 'source-item'); const dot = node('span', `status-dot${healthy ? info.status === 'partial' ? ' warning' : '' : info && info.status === 'error' ? ' error' : ' warning'}`);
-      item.append(dot, document.createTextNode(PROVIDERS[source]));
-      const message = info && info.message ? info.message : healthy ? '已检查数据源' : '暂未获取有效数据';
-      item.title = `${PROVIDERS[source]}：${sourceExpired ? '快照已过期 · ' : ''}${message}${info && info.checkedAt ? `（${formatDate(info.checkedAt)}）` : ''}`;
-      item.setAttribute('aria-label', item.title); statuses.append(item);
+      const detailInfo = state.data && Array.isArray(state.data.sources) ? state.data.sources.find((item) => item.id === source) : null;
+      let dotClass = 'warning'; let message = '暂未载入有效数据'; let checkedAt = null;
+      if (source === 'steam' && state.priceManifest) {
+        if (state.directStatus === 'loading') { message = `正在载入全库现价 ${state.priceShardsLoaded}/${state.priceShardsTotal}`; }
+        else if (state.directStatus === 'ok') { dotClass = ''; message = `已取得 ${state.pricePriced.toLocaleString('zh-CN')} 条国区报价快照，过期记录不参与比价`; }
+        else if (state.directStatus === 'stale') { message = '全库现价部分可用或快照已过期'; }
+        else { dotClass = 'error'; message = '全库现价暂不可用'; }
+        checkedAt = state.priceManifest.checkedAt || state.priceManifest.generatedAt;
+      } else if (detailInfo) {
+        const expired = isQuoteExpired({ checkedAt: detailInfo.checkedAt });
+        const healthy = ['ok', 'partial'].includes(detailInfo.status) && !expired;
+        if (!healthy) dotClass = detailInfo.status === 'error' ? 'error' : 'warning';
+        else if (detailInfo.status === 'partial') dotClass = 'warning';
+        else dotClass = '';
+        message = detailInfo.message || (healthy ? '已检查数据源' : '暂未获取有效数据');
+        checkedAt = detailInfo.checkedAt;
+        if (source === 'steam' && message === '已检查数据源') message = '详情与 CDK 已同步';
+      } else if (source === 'steam' && state.data) {
+        dotClass = ''; message = '详情快照已载入'; checkedAt = state.data.generatedAt;
+      }
+      const item = node('span', 'source-item');
+      item.append(node('span', `status-dot${dotClass ? ` ${dotClass}` : ''}`), document.createTextNode(PROVIDERS[source]));
+      const title = `${PROVIDERS[source]}：${message}${checkedAt ? `（${formatDate(checkedAt)}）` : ''}`;
+      item.title = title;
+      item.setAttribute('aria-label', title);
+      statuses.append(item);
     });
-  }
-  function validateData(data) {
-    if (!data || data.schemaVersion !== 1 || !Array.isArray(data.games)) throw new Error('价格快照格式不正确');
-    data.games = data.games.filter((game) => game && validAppId(game.appid)).map((game) => ({ ...game, appid: Number(game.appid), quotes: Array.isArray(game.quotes) ? game.quotes : [], history: Array.isArray(game.history) ? game.history : [] }));
-    return data;
   }
   function applyTheme(theme, persist) {
     const value = theme === 'light' ? 'light' : 'dark';
@@ -713,32 +1162,7 @@
     const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = value === 'light' ? '#f3f6f8' : '#0c121b';
     if (persist) { try { localStorage.setItem(THEME_KEY, value); } catch (_) { /* Theme still applies when storage is unavailable. */ } }
   }
-  async function loadData(manual) {
-    if (state.loading) return;
-    state.loading = true; const button = $('refresh-button'); button.classList.add('is-loading'); button.disabled = true;
-    try {
-      if (window.location.protocol === 'file:' && window.PRICE_RADAR_BOOTSTRAP) {
-        state.data = validateData(window.PRICE_RADAR_BOOTSTRAP);
-        if (manual) toast('这是本地采集快照；更新价格请运行采集脚本，再生成预览。');
-      } else {
-        const url = new URL('./data/prices.json', window.location.href); if (manual) url.searchParams.set('t', String(Date.now()));
-        const response = await fetch(url, { cache: 'no-store', credentials: 'omit' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        state.data = validateData(await response.json());
-        if (manual) toast('已重新读取发布的快照，未即时查询商家接口。');
-      }
-      state.expirySignature = getExpirySignature(); renderOverview(); renderGameList();
-    } catch (error) {
-      if (state.data) toast('快照读取失败，正在显示上一次成功读取的数据。', true);
-      else {
-        $('snapshot-label').textContent = '价格快照读取失败'; $('snapshot-time').textContent = window.location.protocol === 'file:' ? '请打开“打开预览.html”或通过本地服务访问' : '检查网络或价格数据文件后重试'; $('snapshot-dot').className = 'status-dot error';
-        const empty = node('div', 'empty-state'); const symbol = node('span', 'empty-icon'); symbol.append(icon('alert'));
-        empty.append(symbol, node('h3', '', '暂时无法载入价格'), node('p', '', window.location.protocol === 'file:' ? '浏览器限制直接读取本地 JSON。请打开自包含预览文件，或通过本地 HTTP 服务访问网站。' : '未能读取已发布的价格快照。没有用模拟报价代替真实数据。'));
-        const links = node('div', 'empty-links'); const retry = node('button', 'button button-secondary', '重新读取'); retry.type = 'button'; retry.addEventListener('click', () => loadData(true)); links.append(retry); empty.append(links); $('game-list').replaceChildren(empty); $('game-list').setAttribute('aria-busy', 'false'); $('source-statuses').replaceChildren(node('span', '', '价格快照不可用')); renderDetail(null);
-      }
-      if (manual) toast(`读取失败：${error.message}`, true);
-    } finally { state.loading = false; button.classList.remove('is-loading'); button.disabled = false; }
-  }
+  function steamWidgetUrl(appid) { return validAppId(appid) ? `https://store.steampowered.com/widget/${Number(appid)}/?cc=cn&l=schinese` : null; }
   function openHelp() { state.dialogReturn = document.activeElement; const dialog = $('help-dialog'); if (!dialog.open) dialog.showModal(); }
   function closeHelp() { $('help-dialog').close(); }
   function exportFavorites() {
@@ -753,25 +1177,48 @@
       const parsed = JSON.parse(await file.text()); const ids = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.appids) ? parsed.appids : null;
       if (!ids || ids.length > 10000 || !ids.every(validAppId)) throw new Error('清单需包含有效的 Steam AppID 数组');
       const previousSize = state.favorites.size; ids.forEach((id) => state.favorites.add(Number(id))); saveFavorites();
-      if (state.data) renderGameList(); else renderNav();
-      toast(`已添加 ${state.favorites.size - previousSize} 个本地关注；不会自动采集新游戏。`);
+      if (state.data || state.catalogRows.length) renderGameList(); else renderNav();
+      toast(`已添加 ${state.favorites.size - previousSize} 个本地关注。`);
     } catch (error) { toast(`导入失败：${error.message}`, true); }
     finally { $('import-file').value = ''; }
   }
-  function getExpirySignature() { return (state.data ? state.data.games.map((game) => [game, ...(game.editions || []), ...(game.dlc || [])].map((item) => (item.quotes || []).map((quote) => effectiveStatus(quote)).join(',')).join(';')).join('|') : '') + '::' + [...state.directEntries.values()].map((entry) => effectiveStatus(directQuote(entry, entry.appid))).join(','); }
-  function checkExpiry() { if (state.data) { const signature = getExpirySignature(); if (signature !== state.expirySignature) { state.expirySignature = signature; renderOverview(); renderGameList(); } } }
+  function getExpirySignature() {
+    const details = state.detailList.map((game) => [game, ...(game.editions || []), ...(game.dlc || [])].map((item) => (item.quotes || []).map((quote) => effectiveStatus(quote)).join(',')).join(';')).join('|');
+    const manifest = state.priceManifest;
+    const manifestTime = manifest && (manifest.checkedAt || manifest.generatedAt);
+    const priceExpired = manifestTime ? isQuoteExpired({ checkedAt: manifestTime, status: 'ok', basicPrice: true }) : false;
+    let expiredRecords = 0;
+    if (window.location.protocol !== 'file:') state.directEntries.forEach((record) => {
+      if (record[REC.STATUS] === 0 && isQuoteExpired({ checkedAt: record[REC.CHECKED], basicPrice: true })) expiredRecords += 1;
+    });
+    const detailExpired = state.data ? isQuoteExpired({ checkedAt: state.data.generatedAt, status: 'ok' }) : false;
+    return `${details}::${manifestTime || ''}::${priceExpired}::${expiredRecords}::${detailExpired}`;
+  }
+  function checkExpiry() {
+    if (!state.data && !state.catalogRows.length) return;
+    const signature = getExpirySignature();
+    if (signature !== state.expirySignature) {
+      state.expirySignature = signature;
+      if (!state.directLoading && state.directStatus === 'ok' && state.priceManifest) {
+        const manifestTime = state.priceManifest.checkedAt || state.priceManifest.generatedAt;
+        if (isQuoteExpired({ checkedAt: manifestTime, basicPrice: true })) state.directStatus = 'stale';
+      }
+      renderOverview(); renderGameList();
+    }
+  }
   function initialize() {
     let theme = document.documentElement.dataset.theme;
     try { theme = localStorage.getItem(THEME_KEY) || theme; } catch (_) { /* Use the system preference. */ }
     applyTheme(theme || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'), false);
+    const ready = () => state.data || state.catalogRows.length;
     $('theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light', true));
     $('search-form').addEventListener('submit', (event) => event.preventDefault());
-    $('search-input').addEventListener('input', (event) => { state.query = event.target.value; state.visibleLimit = PAGE_SIZE; clearTimeout(state.searchTimer); state.searchTimer = setTimeout(() => { if (state.data) renderGameList(); }, 100); });
-    $('provider-select').addEventListener('change', (event) => { state.provider = event.target.value; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); });
-    $('sort-select').addEventListener('change', (event) => { state.sort = event.target.value; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); });
-    $('all-tab').addEventListener('click', () => { state.favoritesOnly = false; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); else renderNav(); });
-    $('favorites-tab').addEventListener('click', () => { state.favoritesOnly = true; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); else renderNav(); });
-    $('catalog-more').addEventListener('click', () => { state.visibleLimit += PAGE_SIZE; if (state.data) renderGameList(); });
+    $('search-input').addEventListener('input', (event) => { state.query = event.target.value; state.visibleLimit = PAGE_SIZE; clearTimeout(state.searchTimer); state.searchTimer = setTimeout(() => { if (ready()) renderGameList(); }, 120); });
+    $('provider-select').addEventListener('change', (event) => { state.provider = event.target.value; state.visibleLimit = PAGE_SIZE; if (ready()) renderGameList(); });
+    $('sort-select').addEventListener('change', (event) => { state.sort = event.target.value; state.visibleLimit = PAGE_SIZE; if (ready()) renderGameList(); });
+    $('all-tab').addEventListener('click', () => { state.favoritesOnly = false; state.visibleLimit = PAGE_SIZE; if (ready()) renderGameList(); else renderNav(); });
+    $('favorites-tab').addEventListener('click', () => { state.favoritesOnly = true; state.visibleLimit = PAGE_SIZE; if (ready()) renderGameList(); else renderNav(); });
+    $('catalog-more').addEventListener('click', () => { state.visibleLimit += PAGE_SIZE; if (ready()) renderGameList(); });
     $('refresh-button').addEventListener('click', () => { loadData(true); loadCatalog(true); loadDirectPrices(true); });
     ['help-button', 'method-button', 'privacy-button'].forEach((id) => $(id).addEventListener('click', openHelp));
     ['close-dialog', 'understood-button'].forEach((id) => $(id).addEventListener('click', closeHelp));
@@ -785,12 +1232,12 @@
     $('import-file').addEventListener('change', (event) => importFavorites(event.target.files[0]));
     document.addEventListener('keydown', (event) => {
       if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !$('help-dialog').open && !$('history-dialog').open && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName) && !document.activeElement.isContentEditable) { event.preventDefault(); $('search-input').focus(); }
-      if (event.key === 'Escape' && document.activeElement === $('search-input') && state.query) { clearTimeout(state.searchTimer); $('search-input').value = ''; state.query = ''; state.visibleLimit = PAGE_SIZE; if (state.data) renderGameList(); }
+      if (event.key === 'Escape' && document.activeElement === $('search-input') && state.query) { clearTimeout(state.searchTimer); $('search-input').value = ''; state.query = ''; state.visibleLimit = PAGE_SIZE; if (ready()) renderGameList(); }
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkExpiry(); });
     setInterval(checkExpiry, 60000);
     renderNav(); loadData(false); loadCatalog(false); loadDirectPrices(false);
   }
-  window.PriceRadar = Object.freeze({ isPrice, isUsableQuote, isPurchasable, isQuoteExpired, effectiveStatus, getSteamQuote, getCdkQuote, normalizeQuery, filterGames, sortGames, computeSavings, safeUrl, validateData, validateCatalog, validateDirectData, directQuote, mergeDirectPrice, steamWidgetUrl, validAppId, normalizeHistoryPoints, selectHistoryRange, stepPath, contentOptions, selectedContent });
+  window.PriceRadar = Object.freeze({ isPrice, isUsableQuote, isPurchasable, isQuoteExpired, effectiveStatus, getSteamQuote, getCdkQuote, normalizeQuery, filterGames, sortGames, computeSavings, safeUrl, validateData, validateCatalog, validatePriceManifest, validatePriceShard, directQuote, mergeDirectPrice, steamWidgetUrl, validAppId, normalizeHistoryPoints, selectHistoryRange, stepPath, contentOptions, selectedContent, searchCatalog });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true }); else initialize();
 })();

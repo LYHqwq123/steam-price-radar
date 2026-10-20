@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0c121b">
-  <meta name="description" content="查看 Steam 国区现价与小黑盒历史价格走势，分开比较杉果、SteamPY、SteamCici 的 CDK 报价。中文游戏搜索，来源与更新时间清楚可见。">
+  <meta name="description" content="搜索 Steam 全库游戏，查看国区人民币现价，再比较杉果、SteamPY、SteamCici 的 CDK 报价。来源与更新时间清楚可见。">
   <title>游戏价签 · Steam 直售与 CDK 比价</title>
   <script>try{document.documentElement.dataset.theme=localStorage.getItem('game-price-radar.theme.v1')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')}catch(e){document.documentElement.dataset.theme='dark'}</script>
   <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
@@ -23,18 +23,18 @@
 
   <main class="page-shell">
     <section class="intro" aria-labelledby="page-title">
-      <div><p class="eyebrow"><span class="live-dot"></span>每一次入手，都心中有数</p><h1 id="page-title">游戏好价，<span>一眼分清。</span></h1><p class="intro-description">搜索 Steam 游戏，分清标准版、豪华版与 DLC，再比较三家 CDK 报价。</p></div>
+      <div><p class="eyebrow"><span class="live-dot"></span>每一次入手，都心中有数</p><h1 id="page-title">游戏好价，<span>一眼分清。</span></h1><p class="intro-description">搜索 Steam 全库游戏，查看国区现价；详情已采集的游戏还能分清版本、DLC 并比较三家 CDK 报价。</p></div>
       <div class="region-badge"><span class="region-icon" aria-hidden="true">CN</span><span>中国大陆<small>人民币 · CNY</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></div>
     </section>
 
     <section class="overview-bar" aria-label="数据概况">
-      <div class="overview-item"><span class="stat-icon mint" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h4"/></svg></span><div><span class="stat-value" id="game-count">—</span><span class="stat-label" id="catalog-coverage">可搜索游戏目录</span></div></div>
-      <div class="overview-item"><span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 21h8M12 18v3"/></svg></span><div><span class="stat-value" id="direct-price-count">—</span><span class="stat-label">Steam 国区现价</span></div></div>
+      <div class="overview-item"><span class="stat-icon mint" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 9h8M8 13h4"/></svg></span><div><span class="stat-value" id="game-count">—</span><span class="stat-label" id="catalog-coverage">Steam 全库可搜索</span></div></div>
+      <div class="overview-item"><span class="stat-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM8 21h8M12 18v3"/></svg></span><div><span class="stat-value" id="direct-price-count">—</span><span class="stat-label">已取得 Steam 报价快照</span></div></div>
       <div class="overview-item"><span class="stat-icon violet" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h9l6 6-10 10-6-6V5z"/><circle cx="9" cy="9" r="1"/></svg></span><div><span class="stat-value"><span id="complete-price-count">—</span> 款详情已采集</span><span class="stat-label">版本 / DLC / 历史与 CDK</span></div></div>
-      <div class="snapshot-status"><span class="status-dot" id="snapshot-dot"></span><div><span id="snapshot-label">正在读取价格快照</span><small id="snapshot-time">计划每 15 分钟更新</small></div><button class="icon-button" id="refresh-button" type="button" aria-label="重新读取已发布价格快照" title="重新读取快照，不会即时查询各平台"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg></button></div>
+      <div class="snapshot-status"><span class="status-dot" id="snapshot-dot"></span><div><span id="snapshot-label">正在读取价格快照</span><small id="snapshot-time">报价每 2 小时 · 详情每 15 分钟轮换补采</small></div><button class="icon-button" id="refresh-button" type="button" aria-label="重新读取已发布价格快照" title="重新读取快照，不会即时查询各平台"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/></svg></button></div>
     </section>
 
-    <p class="direct-price-status" id="direct-price-time" role="status">正在读取 Steam 基础现价…</p>
+    <p class="direct-price-status" id="direct-price-time" role="status">正在读取 Steam 报价快照…</p>
     <section class="workspace" id="games" aria-label="游戏比价">
       <div class="catalog-panel">
         <div class="catalog-heading"><h2 id="catalog-title">发现下一款好游戏<span id="visible-count"></span></h2><div class="list-tools"><button type="button" class="icon-button" id="export-button" title="导出关注清单" aria-label="导出关注 AppID 清单"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg></button><button type="button" class="icon-button" id="import-button" title="导入关注清单" aria-label="导入关注 AppID 清单"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M5 16v4h14v-4"/></svg></button><input type="file" id="import-file" accept="application/json,.json" hidden></div></div>
@@ -44,7 +44,7 @@
         <div class="list-column-labels" aria-hidden="true"><span>游戏 / 版本</span><span>Steam 直售</span><span>CDK 报价</span></div>
         <div id="game-list" class="game-list" aria-live="polite" aria-busy="true"><div class="loading-state"><span class="loading-spinner"></span><p>正在载入价格数据…</p></div></div>
         <button class="button button-secondary catalog-more" type="button" id="catalog-more" hidden>显示更多游戏</button>
-        <div class="catalog-footnote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7z"/><path d="m8 12 3 3 5-6"/></svg><span>默认比较标准版、人民币；地区或库存未确认会单独标注。</span></div>
+        <div class="catalog-footnote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7z"/><path d="m8 12 3 3 5-6"/></svg><span>默认展示已采集详情与折扣榜；搜索覆盖 Steam 全库，价格均为国区人民币快照。</span></div>
       </div>
       <aside class="detail-panel" id="game-detail" aria-label="游戏价格详情"><div class="detail-placeholder"><span class="placeholder-radar" aria-hidden="true"><span></span></span><h2>好价，正在路上</h2><p>载入游戏后，在这里查看完整报价。</p></div></aside>
     </section>
@@ -53,7 +53,7 @@
     <footer class="site-footer"><a class="footer-brand" href="./">游戏价签 <span>GAME PRICE RADAR</span></a><p>独立比价工具 · 价格以商家结算页为准 · 无需登录</p><button class="text-button" type="button" id="privacy-button">数据与隐私</button></footer>
   </main>
 
-  <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><div><p class="eyebrow">HOW IT WORKS</p><h2 id="help-title">清楚价格，也清楚边界。</h2></div><button class="icon-button" type="button" id="close-dialog" aria-label="关闭说明"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="dialog-content"><section><h3><span>01</span> 直售与 CDK 分开算</h3><p>直售价指 Steam 中国大陆商店的当前人民币价格。CDK 报价来自杉果、SteamPY 和 SteamCici，按已匹配的游戏版本展示。地区或库存未核验的商品仅列为参考，不能保证国区可激活或当前可买。礼物代购、余额购不计入 CDK 最低价。</p></section><section><h3><span>02</span> 低报价不等于可成交</h3><p>“可购”需要已确认库存、有效商品和可用报价。库存未知的价格标记为“参考报价”，缺货、下架、错误或过期报价不参与最低价。领取优惠券、会员与新客优惠、额外手续费以商家页面为准。</p></section><section><h3><span>03</span> 快照有时间，历史有起点</h3><p>核心游戏计划每 15 分钟更新，其他目录游戏分批采集；调度或接口可能延迟。刷新按钮只重新读取已发布快照，不会即时查询全平台。Steam 国区历史走势取自小黑盒返回的人民币记录，支持切换近 30 / 90 / 180 天或全部记录、放大和逐点查看。收录区间最低只统计来源返回的区间，不代表全历史最低。本站 CDK 可购日记录单独展示；SteamDB 仅保留核对入口。</p></section><section><h3><span>04</span> 关注保存在你的浏览器</h3><p>无需账号，也不收集商家凭证。关注使用本机浏览器存储，可导入或导出 AppID 清单。导入只添加本地关注，不会自动收录或采集新游戏。切换浏览器或清除网站数据后，关注可能丢失。</p></section><div class="dialog-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3h.01"/></svg><p>平台接口属于各商家，可能发生变动。每条报价都保留来源和更新时间；购买前请核对版本、地区和最终结算金额。</p></div></div><div class="dialog-footer"><span>键盘快捷键：<kbd>/</kbd> 搜索 · <kbd>Esc</kbd> 关闭</span><button type="button" class="button button-primary" id="understood-button">了解了</button></div></dialog>
+  <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><div><p class="eyebrow">HOW IT WORKS</p><h2 id="help-title">清楚价格，也清楚边界。</h2></div><button class="icon-button" type="button" id="close-dialog" aria-label="关闭说明"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div class="dialog-content"><section><h3><span>01</span> 直售与 CDK 分开算</h3><p>直售价指 Steam 中国大陆商店的当前人民币价格。CDK 报价来自杉果、SteamPY 和 SteamCici，按已匹配的游戏版本展示。地区或库存未核验的商品仅列为参考，不能保证国区可激活或当前可买。礼物代购、余额购不计入 CDK 最低价。</p></section><section><h3><span>02</span> 低报价不等于可成交</h3><p>“可购”需要已确认库存、有效商品和可用报价。库存未知的价格标记为“参考报价”，缺货、下架、错误或过期报价不参与最低价。领取优惠券、会员与新客优惠、额外手续费以商家页面为准。</p></section><section><h3><span>03</span> 快照有时间，历史有起点</h3><p>Steam 报价快照计划每 2 小时同步一次；版本、DLC、CDK 与历史等详情每 15 分钟轮换补采 20 款目录游戏，调度或接口可能延迟。顶部数量表示已取得的报价记录，已过期记录不参与现价与排序。刷新按钮只重新读取已发布快照，不会即时查询全平台。Steam 国区历史走势取自小黑盒返回的人民币记录，支持切换近 30 / 90 / 180 天或全部记录、放大和逐点查看。收录区间最低只统计来源返回的区间，不代表全历史最低。本站 CDK 可购日记录单独展示；SteamDB 仅保留核对入口。</p></section><section><h3><span>04</span> 关注保存在你的浏览器</h3><p>无需账号，也不收集商家凭证。关注使用本机浏览器存储，可导入或导出 AppID 清单。导入只添加本地关注；关注游戏的价格是否可见取决于全库同步进度。切换浏览器或清除网站数据后，关注可能丢失。</p></section><div class="dialog-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3h.01"/></svg><p>平台接口属于各商家，可能发生变动。每条报价都保留来源和更新时间；购买前请核对版本、地区和最终结算金额。</p></div></div><div class="dialog-footer"><span>键盘快捷键：<kbd>/</kbd> 搜索 · <kbd>Esc</kbd> 关闭</span><button type="button" class="button button-primary" id="understood-button">了解了</button></div></dialog>
   <dialog id="history-dialog" class="history-dialog" aria-labelledby="history-dialog-title"><div class="dialog-heading"><div><p class="eyebrow">历史价格 · 中国大陆 / CNY</p><h2 id="history-dialog-title">Steam 国区价格走势</h2></div><button class="icon-button" type="button" id="close-history-dialog" aria-label="关闭历史价格图"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><div id="history-dialog-content" class="history-dialog-content"></div></dialog>
   <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>

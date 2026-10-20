@@ -20,19 +20,38 @@ def package(output: Path) -> Path:
     data = json.loads((site / "data/prices.json").read_text(encoding="utf-8"))
     index_path = site / "data/catalog-index.json"
     catalog = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {"games": []}
-    direct_path = site / "data/direct-prices.json"
-    direct = json.loads(direct_path.read_text(encoding="utf-8")) if direct_path.exists() else {"games": []}
+    manifest_path = site / "data/price-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else None
+    shards = {}
+    if isinstance(manifest, dict):
+        for entry in manifest.get("shards", []):
+            if not isinstance(entry, dict) or entry.get("available") is not True:
+                continue
+            file = entry.get("file")
+            if not isinstance(file, str) or not re.fullmatch(r"price-shards/price-[0-9]{2}\.json", file):
+                raise ValueError("Price manifest contains an unsafe shard path.")
+            shard_path = site / "data" / file
+            if shard_path.exists():
+                shards[file] = json.loads(shard_path.read_text(encoding="utf-8"))
     # Data is never interpreted as markup, including text returned by a store.
-    encoded = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-    encoded_catalog = json.dumps(catalog, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-    encoded_direct = json.dumps(direct, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    def encoded(value):
+        return json.dumps(value, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+    encoded_data = encoded(data)
+    encoded_catalog = encoded(catalog)
+    encoded_manifest = encoded(manifest)
+    encoded_shards = encoded(shards)
     html, css_count = re.subn(
         r'<link\b[^>]*href=["\'](?:\./)?assets/style\.css["\'][^>]*>',
         lambda _: "<style>\n" + css + "\n</style>",
         html,
         flags=re.I,
     )
-    script = "<script>window.PRICE_RADAR_BOOTSTRAP=" + encoded + ";window.__CATALOG_DATA__=" + encoded_catalog + ";window.__DIRECT_PRICE_DATA__=" + encoded_direct + ";</script>\n<script>\n" + js.replace("</script", "<\\/script") + "\n</script>"
+    script = ("<script>window.PRICE_RADAR_BOOTSTRAP=" + encoded_data
+              + ";window.__CATALOG_DATA__=" + encoded_catalog
+              + ";window.__PRICE_MANIFEST__=" + encoded_manifest
+              + ";window.__PRICE_SHARDS__=" + encoded_shards
+              + ";</script>\n<script>\n" + js.replace("</script", "<\\/script") + "\n</script>")
     html, js_count = re.subn(
         r'<script\b[^>]*src=["\'](?:\./)?assets/app\.js["\'][^>]*>\s*</script>',
         lambda _: script,

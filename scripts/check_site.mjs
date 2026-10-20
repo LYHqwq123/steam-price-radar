@@ -173,47 +173,118 @@ for (const game of data.games) {
 const indexPath = resolve(dist, 'data/catalog-index.json');
 assert.ok(existsSync(indexPath), 'search directory is missing');
 const index = JSON.parse(readFileSync(indexPath, 'utf8'));
-assert.equal(index.schemaVersion, 1, 'unsupported catalog schema');
+assert.equal(index.schemaVersion, 2, 'unsupported catalog schema');
 date(index.generatedAt, 'catalog.generatedAt');
+nonempty(index.source, 'catalog.source');
+webUrl(index.sourceUrl, 'catalog.sourceUrl');
+assert.ok(['ok', 'partial', 'stale', 'error'].includes(index.status), 'catalog has an unsupported status');
+assert.equal(typeof index.complete, 'boolean', 'catalog.complete must be boolean');
+assert.ok(index.syncState && typeof index.syncState === 'object', 'catalog sync cursor is missing');
 assert.ok(Array.isArray(index.games) && index.games.length >= data.games.length, 'catalog must contain the priced games');
-const indexedIds = new Set();
-for (const game of index.games) {
-  assert.ok(Number.isInteger(game.appid) && game.appid > 0 && !indexedIds.has(game.appid), 'catalog contains an invalid or duplicate AppID');
-  indexedIds.add(game.appid);
-  nonempty(game.name, `catalog ${game.appid}.name`);
+assert.equal(index.gameCount, index.games.length, 'catalog game count must reflect its rows');
+if (index.totalCount !== undefined) {
+  assert.ok(Number.isInteger(index.totalCount) && index.totalCount >= index.games.length, 'catalog total count is invalid');
 }
-for (const appid of appids) assert.ok(indexedIds.has(appid), `priced game ${appid} must also be searchable in the index`);
-if (index.complete === false) assert.notEqual(index.status, 'complete', 'a partial directory must not be labelled complete');
-
-const directPath = resolve(dist, 'data/direct-prices.json');
-assert.ok(existsSync(directPath), 'batch Steam current prices are missing');
-const direct = JSON.parse(readFileSync(directPath, 'utf8'));
-assert.equal(direct.schemaVersion, 1, 'unsupported direct price schema');
-assert.equal(direct.source, 'steam');
-assert.equal(direct.country, 'CN');
-assert.equal(direct.currency, 'CNY');
-date(direct.generatedAt, 'direct.generatedAt');
-assert.ok(['ok', 'partial', 'stale', 'error'].includes(direct.status));
-assert.ok(Array.isArray(direct.games), 'batch prices must contain game records');
-assert.equal(direct.gameCount, direct.games.length);
-const directIds = new Set();
-let directPricedCount = 0;
-for (const row of direct.games) {
-  const label = `Steam batch ${row.appid}`;
-  assert.ok(Number.isInteger(row.appid) && indexedIds.has(row.appid) && !directIds.has(row.appid), `${label}: invalid or duplicate AppID`);
-  directIds.add(row.appid);
-  assert.ok(['ok', 'unavailable', 'stale', 'error'].includes(row.status), `${label}: unsupported status`);
-  money(row.price, `${label}.price`);
-  money(row.originalPrice, `${label}.originalPrice`);
-  assert.ok(row.discount === null || (Number.isFinite(row.discount) && row.discount >= 0 && row.discount <= 100), `${label}: invalid discount`);
-  if (row.checkedAt != null) date(row.checkedAt, `${label}.checkedAt`);
-  if (row.status === 'ok') {
-    assert.notEqual(row.price, null, `${label}: a valid price cannot be missing`);
-    date(row.checkedAt, `${label}.checkedAt`);
-    directPricedCount += 1;
+const indexedIds = new Set();
+for (const row of index.games) {
+  assert.ok(Array.isArray(row) && row.length >= 2 && row.length <= 4, 'catalog rows must use the compact [appid, name, nameEn?, aliases?] form');
+  const [appid, name, nameEn, aliases] = row;
+  assert.ok(Number.isInteger(appid) && appid > 0 && !indexedIds.has(appid), 'catalog contains an invalid or duplicate AppID');
+  indexedIds.add(appid);
+  nonempty(name, `catalog ${appid}.name`);
+  if (nameEn !== undefined) assert.equal(typeof nameEn, 'string', `catalog ${appid}.nameEn must be a string`);
+  if (aliases !== undefined) {
+    assert.ok(Array.isArray(aliases), `catalog ${appid}.aliases must be an array`);
+    assert.equal(new Set(aliases).size, aliases.length, `catalog ${appid}: duplicate alias`);
+    for (const alias of aliases) nonempty(alias, `catalog ${appid}.alias`);
   }
 }
-assert.equal(direct.pricedCount, directPricedCount, 'batch price coverage count must reflect actual successful amounts');
+for (const appid of appids) assert.ok(indexedIds.has(appid), `priced game ${appid} must also be searchable in the index`);
+
+const manifestPath = resolve(dist, 'data/price-manifest.json');
+assert.ok(existsSync(manifestPath), 'whole-library price manifest is missing');
+const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+assert.equal(manifest.schemaVersion, 2, 'unsupported price manifest schema');
+assert.equal(manifest.source, 'steam');
+assert.equal(manifest.country, 'CN');
+assert.equal(manifest.currency, 'CNY');
+date(manifest.generatedAt, 'manifest.generatedAt');
+assert.ok(Number.isInteger(manifest.refreshMinutes) && manifest.refreshMinutes > 0, 'manifest refresh interval is invalid');
+assert.ok(['ok', 'partial', 'error'].includes(manifest.status), 'manifest has an unsupported status');
+assert.ok(Number.isInteger(manifest.shardCount) && manifest.shardCount >= 1 && manifest.shardCount <= 1000, 'invalid shard count');
+assert.ok(Array.isArray(manifest.shards) && manifest.shards.length === manifest.shardCount, 'manifest must describe every shard');
+assert.equal(manifest.catalogGameCount, index.gameCount, 'manifest catalog count must match the search directory');
+nonempty(manifest.scope, 'manifest.scope');
+nonempty(manifest.note, 'manifest.note');
+
+const shardIds = new Set();
+let shardGameCount = 0;
+let shardPricedCount = 0;
+let availableShards = 0;
+for (let position = 0; position < manifest.shardCount; position += 1) {
+  const entry = manifest.shards[position];
+  const label = `shard ${position}`;
+  assert.ok(entry && typeof entry === 'object', `${label}: missing entry`);
+  assert.equal(entry.index, position, `${label}: out-of-order index`);
+  assert.match(entry.file, /^price-shards\/price-[0-9]{2}\.json$/, `${label}: invalid relative path`);
+  assert.equal(typeof entry.available, 'boolean', `${label}.available must be boolean`);
+  assert.ok(Number.isInteger(entry.count) && entry.count >= 0, `${label}.count is invalid`);
+  assert.ok(Number.isInteger(entry.priced) && entry.priced >= 0, `${label}.priced is invalid`);
+  if (entry.checkedAt !== null) date(entry.checkedAt, `${label}.checkedAt`);
+  if (!entry.available) {
+    assert.equal(entry.count, 0, `${label}: an unavailable shard cannot report records`);
+    assert.equal(entry.priced, 0, `${label}: an unavailable shard cannot report prices`);
+    continue;
+  }
+  availableShards += 1;
+  const shardPath = resolve(dist, 'data', entry.file);
+  assert.ok(shardPath.startsWith(resolve(dist, 'data') + sep), `${label}: shard path escapes the data directory`);
+  assert.ok(existsSync(shardPath), `${label}: missing shard file ${entry.file}`);
+  const shard = JSON.parse(readFileSync(shardPath, 'utf8'));
+  assert.equal(shard.schemaVersion, 2, `${label}: unsupported shard schema`);
+  assert.equal(shard.shard, position, `${label}: shard index mismatch`);
+  assert.equal(shard.shardCount, manifest.shardCount, `${label}: shard count mismatch`);
+  date(shard.checkedAt, `${label}.checkedAt`);
+  assert.ok(Array.isArray(shard.games), `${label}: games must be an array`);
+  let rowCount = 0;
+  let rowPriced = 0;
+  for (const row of shard.games) {
+    assert.ok(Array.isArray(row) && row.length >= 5 && row.length <= 6, `${label}: invalid compact row`);
+    const [appid, price, originalPrice, discount, status, checkedAt = shard.checkedAt] = row;
+    assert.ok(Number.isInteger(appid) && appid > 0 && appid % manifest.shardCount === position, `${label}: AppID does not belong to this shard`);
+    assert.ok(indexedIds.has(appid), `${label}: AppID ${appid} is missing from the search directory`);
+    assert.ok(!shardIds.has(appid), `${label}: duplicate AppID ${appid}`);
+    shardIds.add(appid);
+    assert.ok(Number.isInteger(status) && status >= 0 && status <= 3, `${label}: invalid packed status`);
+    if (status === 0 || status === 2) {
+      assert.ok(Number.isInteger(price) && price >= 0, `${label}: priced row needs integer cents`);
+      date(checkedAt, `${label}: priced row needs its actual check time`);
+    } else assert.equal(price, null, `${label}: unpriced row must not carry an amount`);
+    assert.ok(originalPrice === null || (Number.isInteger(originalPrice) && originalPrice >= 0), `${label}: invalid original cents`);
+    assert.ok(discount === null || (Number.isInteger(discount) && discount >= 0 && discount <= 100), `${label}: invalid discount`);
+    if (checkedAt !== null) date(checkedAt, `${label}.checkedAt row`);
+    if (status === 0) rowPriced += 1;
+    rowCount += 1;
+  }
+  assert.equal(entry.count, rowCount, `${label}: manifest record count does not match the shard`);
+  assert.equal(entry.priced, rowPriced, `${label}: manifest priced count does not match the shard`);
+  shardGameCount += rowCount;
+  shardPricedCount += rowPriced;
+}
+assert.equal(manifest.gameCount, shardGameCount, 'manifest game count must equal the sum of shards');
+assert.equal(manifest.pricedCount, shardPricedCount, 'manifest priced count must equal the sum of shards');
+assert.equal(manifest.availableShardCount, availableShards, 'manifest available-shard count is wrong');
+assert.equal(manifest.missingCount, manifest.catalogGameCount - shardGameCount, 'manifest missing count is wrong');
+assert.ok(manifest.statusCounts && typeof manifest.statusCounts === 'object', 'manifest status counts are missing');
+for (const status of ['ok', 'unavailable', 'stale', 'error']) {
+  assert.ok(Number.isInteger(manifest.statusCounts[status]) && manifest.statusCounts[status] >= 0, `manifest status count ${status} is invalid`);
+}
+assert.equal(Object.values(manifest.statusCounts).reduce((sum, value) => sum + value, 0), manifest.gameCount, 'manifest status counts must sum to the game count');
+for (const field of ['staleRecordCount', 'duplicateCount', 'invalidCount']) {
+  assert.ok(Number.isInteger(manifest[field]) && manifest[field] >= 0, `manifest ${field} is invalid`);
+}
+if (manifest.checkedAt !== null) date(manifest.checkedAt, 'manifest.checkedAt');
+if (manifest.oldestCheckedAt !== null) date(manifest.oldestCheckedAt, 'manifest.oldestCheckedAt');
 
 function filesBelow(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -255,4 +326,4 @@ for (const asset of filesBelow(dist)) {
   }
 }
 
-console.log(`Website checks passed: ${data.games.length} games, ${data.sources.length} sources; prices, regional histories, and local resource paths are valid.`);
+console.log(`Website checks passed: ${index.gameCount} directory games, ${manifest.pricedCount} current Steam prices across ${manifest.availableShardCount}/${manifest.shardCount} shards, ${data.games.length} detailed games; histories and local paths are valid.`);

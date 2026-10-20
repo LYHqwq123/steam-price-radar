@@ -1,38 +1,88 @@
 # 游戏价签 · Steam 游戏比价雷达
 
-中文静态比价网站：搜索 Steam 游戏目录，分别比较 **Steam 国区直售价** 与 **杉果、SteamPY、SteamCici 的 CDK 报价**，查看标准版、豪华版、捆绑包及 DLC，并显示来自小黑盒的本体标准版价格走势。支持白天／黑夜主题，主题和关注清单保存在当前浏览器。
+中文静态比价网站：搜索 Steam 国区游戏目录，比较 **Steam 国区现价** 与 **杉果、SteamPY、SteamCici 的 CDK 报价**；已采集详情的游戏还能查看版本、捆绑包、DLC 和小黑盒历史走势。支持白天／黑夜主题，主题和关注清单保存在当前浏览器。
 
-在线网站：[游戏价签](https://lyhqwq123.github.io/steam-price-radar/)。源码仓库：[LYHqwq123/steam-price-radar](https://github.com/LYHqwq123/steam-price-radar)。首次部署、自动采价和目录同步已于 2026-10-17 在 GitHub Actions 实际运行成功；后续状态可在仓库 Actions 查看。
+在线网站：[游戏价签](https://lyhqwq123.github.io/steam-price-radar/)。源码仓库：[LYHqwq123/steam-price-radar](https://github.com/LYhqwq123/steam-price-radar)。
 
-网页读取已发布的目录和价格 JSON；自动同步由 GitHub Actions 执行，无需常驻服务器。**目录可搜索，不代表每款游戏已有价格；定时快照也不是全库实时行情。**
+网页只读取已发布的数据快照；采集由 GitHub Actions 定时执行，无需常驻服务器。**全库价格是分批快照，不是实时行情；目录已收录也不等于本轮一定取得价格。**
+
+## 全库数据怎么组织
+
+Steam 国区公开目录约 18 万款游戏。为了不把几十万个对象塞进一个页面，数据分为四层：
+
+| 数据 | 内容与节奏 |
+| --- | --- |
+| 搜索目录 `catalog-index.json` | 紧凑数组 `[appid, name, nameEn?, aliases?]`，按 AppID 排序；每周日 18:23 UTC（北京时间周一 02:23）接续游标继续遍历，单次可走完整公开搜索结果 |
+| 全库现价 `price-shards/price-NN.json` | 64 个分片，按 `appid % 64` 划分；每个分片保存整数分币值、原价、折扣、状态和独立检查时间 |
+| 分片清单 `price-manifest.json` | 汇总覆盖数、有效现价数、缺失分片、状态计数和最新／最旧检查时间；页面先读它，再按 6 个并发懒加载分片 |
+| 游戏详情 `prices.json` | 已采集的版本、DLC、CDK 与历史；每小时第 7、22、37、52 分钟轮换约 20 款，新增内容不会覆盖旧报价 |
+
+现价工作流每 2 小时的第 17 分钟运行一次（`17 */2 * * *`）。GitHub Actions 启动 8 个采集 worker，每个 worker 负责连续 8 个分片；合并后重建清单并直接部署。每轮从同一工作流、默认分支上最近成功的合并快照恢复数据，逐款保留较新的检查结果；本轮合并快照保存为保留 14 天的 Actions artifact，下轮继续补采。每周保存一次 Git 基线，避免仓库每两小时膨胀。代码更新部署也恢复最新快照，不会把现价倒退到每周基线。
+
+目录尚未完整时，现价只覆盖当前已同步部分；页面顶部会显示「可搜索 / 全库约」和分片进度。目录同步结束后会重建覆盖清单并排队触发现价采集与部署；首次部署也可在 Actions 手动运行一次 `Refresh all Steam prices and deploy`，并保留 `save_baseline`，建立已采集数据的基线。免费、未发售或国区不可售条目可能没有可用价格。
+
+### 前端约束与过期规则
+
+- 搜索最多返回 2,000 条并按相关度排序，超出时明确提示补充关键词或输入 AppID；每次翻页 30 条。
+- 默认列表只展示已采集详情的游戏和折扣最高的 120 款目录游戏，避免首屏渲染 18 万行。
+- 目录游戏的价格来自分片；没有有效现价时只嵌入 Steam 官方价格组件，不猜测价格，也不复用其他版本的资料。
+- 全库现价超过 **8 小时**未更新即视为过期，不参与现价卡、最低价与排序；已采集详情最多保留 **48 小时**。双击预览按采集时快照展示并标注，不冒充当前价。
+- 未返回 `price_overview` 不代表游戏免费；接口失败时保留旧金额与原始检查时间，并标记过期或错误。
 
 ## 本机预览
 
-双击根目录的 **`打开预览.html`**，或运行 `启动预览.cmd`，即可查看独立快照，无需安装依赖。更新数据后需重新生成预览文件。
+双击根目录的 **`打开预览.html`**，或运行 `启动预览.cmd`，无需安装依赖。该文件内嵌目录、清单、全部分片和详情快照，更新数据后需重新生成。
 
-需要预览最新 `dist/` 时，在项目目录运行：
+预览最新 `dist/`：
 
 ```powershell
 python scripts/serve.py --open
 ```
 
-默认地址为 `http://127.0.0.1:8765/`，按 `Ctrl+C` 停止；端口占用可加 `--port 8766`。不要直接双击 `dist/index.html`，浏览器会限制其读取本地 JSON。预览服务只绑定本机地址，不提供即时查价代理。
+默认地址为 `http://127.0.0.1:8765/`，按 `Ctrl+C` 停止；端口占用可加 `--port 8766`。预览服务只绑定本机地址，不提供即时查价代理。
 
-## 目录与更新节奏
+## 手动采集与检查
 
-| 数据 | 同步方式与范围 |
+Python 采集脚本只使用标准库，无需 `pip install`；网页检查需要 Node.js，无需 npm 包。
+
+```powershell
+# 继续同步目录；--pages 2500 足够单次遍历约 18.4 万款
+python scripts/sync_catalog.py --pages 2500 --delay 0.6
+
+# 单个 worker 试跑现价（每批 100 个 AppID，可用 --max-batches 限制时长）
+python scripts/direct_prices.py --worker-index 0 --worker-count 8 --shard-count 64 --max-batches 20
+
+# 本机完整刷新可去掉 worker 参数；完成后重建浏览器清单
+python scripts/build_data.py
+
+# 详情轮换；指定 AppID 可优先补齐
+python scripts/refresh_prices.py --batch-size 20
+python scripts/refresh_prices.py --appids "386940,620"
+
+# 校验、测试与打包
+node scripts/check_site.mjs
+python -m unittest discover -s tests -v
+python scripts/package_preview.py
+```
+
+目录脚本支持 `--output`、`--catalog`、`--pages`、`--page-size`、`--api-page-size` 和 `--delay`。配置 **`STEAM_WEB_API_KEY`** 后改用官方 `IStoreService/GetAppList` 并按修改时间增量同步；不配置时匿名遍历公开搜索页。密钥只在采集进程中使用，不写入网页、数据文件或日志。
+
+`direct_prices.py` 支持 `--worker-index/--worker-count` 八路分片采集，也支持 `--max-seconds`、`--max-batches`、`--delay`；`--write-manifest` 会在写分片后重建清单。`refresh_prices.py` 保留未轮到的游戏及原报价时间，运行前不要删除 `prices.json`、目录或分片。
+
+## GitHub Pages 与自动任务
+
+仓库需要在 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。四份工作流共用并发锁并允许最多 100 个待执行任务排队，默认分支上依次执行，新增详情任务不会取消已有的待发布任务：
+
+| 工作流 | 作用 |
 | --- | --- |
-| 搜索目录 | 每天同步一批 Steam 国区公开搜索可见的游戏本体，保存分页游标，下次接续；不含受限条目、DLC、软件和捆绑包 |
-| 完整度 | `catalog-index.json` 用 `status`、`complete`、`scope` 和说明标注实际覆盖范围；`partial` 表示尚在补全，不等于 Steam 全库 |
-| 目录基础现价 | `direct_prices.py` 按每批 100 个 AppID 采集 Steam 国区现价，每轮最多 80 批；支持游标接续与网络失败重试，现价不再受完整资料每轮 3 款的配额限制 |
-| 核心游戏详情 | `data/catalog.json` 中的核心与优先游戏计划每 15 分钟刷新完整报价，包含超级鸡马 |
-| 其他游戏详情 | 每轮额外选取 3 款；同时为未采游戏和已采旧游戏保留配额，逐步补齐版本、DLC、CDK 和历史；不同游戏更新时间不同 |
-| 版本与 DLC | 按精确购买包或 AppID 采集独立价格；每款游戏每轮最多补取 30 项待核验 DLC 资料，其余继续排队 |
-| Steam 历史 | 小黑盒国区人民币记录缓存 24 小时，避免每轮重复请求；不与 CDK 历史混用 |
+| `pages.yml` / Deploy GitHub Pages | 页面代码、脚本或核心目录变化后的检查与发布 |
+| `refresh-prices.yml` / Refresh all Steam prices and deploy | 每 2 小时采集全库分片、重建清单并部署；手动运行可立即保存完整基线 |
+| `refresh-details.yml` / Refresh detailed game data | 每 15 分钟采集约 20 款游戏的版本、DLC、CDK 与历史；详情提交后由下一次现价部署带上线 |
+| `sync-catalog.yml` / Sync full Steam catalog | 每周接续遍历公开目录、重建覆盖清单并提交游标，再排队触发现价采集与部署 |
 
-匿名公开目录同步无需密钥。配置 **`STEAM_WEB_API_KEY`** 后，目录脚本改用官方 `IStoreService/GetAppList`：首次分页全量同步，完成后按修改时间增量更新。这里的全量指官方商店接口返回的游戏本体，仍不代表所有已下架、受限或非游戏应用。密钥只在采集进程中使用，不写入网页、目录 JSON 或日志。
+可选官方目录密钥在 **Settings → Secrets and variables → Actions → New repository secret** 中添加，名称为 **`STEAM_WEB_API_KEY`**。自动提交需要 `contents: write`，恢复历史构建快照需要 `actions: read`，目录任务排队触发采价需要 `actions: write`，Pages 发布需要相应 Pages 权限，工作流已声明。
 
-目录游戏已有基础现价时直接显示价格卡，版本、DLC、CDK 和历史尚未取得会分别注明。没有可读的本站现价时，直接嵌入 Steam 官方价格组件并保留商店入口；组件的跨域内容不读入本站排序或最低价计算。空的 `price_overview` 不能据此判为免费。失败时保留已有报价与原检查时间并标记过期，不填估算价格或模拟曲线。
+定时任务只在默认分支执行，可能因 GitHub 排队、商家限流或网络限制而延迟。公开仓库长期无活动时，GitHub 可能停用计划任务；可在 Actions 重新启用。页面显示每条报价的实际检查时间；本地独立预览明确保留为采集时快照。
 
 ## 价格与版本怎么比较
 
@@ -55,76 +105,35 @@ Steam 官方接口失败时，可以使用小黑盒公开国区参考价，并�
 
 报价不叠加个人优惠、新客券、会员券或支付活动。购买前请核对商品版本、所含内容、激活地区、库存及最终结算金额。
 
-## 手动同步与检查
-
-Python 采集脚本使用标准库，无需 `pip install`；检查页面另需 Node.js，无需安装 npm 包。在项目目录依次运行：
-
-```powershell
-# 扩充下一批目录；首次可用 --pages 50，默认每页最多 100 项
-python scripts/sync_catalog.py --pages 30
-
-# 核心游戏 + 3 款目录游戏逐步采价
-python scripts/refresh_prices.py --batch-size 3
-
-# 批量更新已同步目录的 Steam 基础现价
-python scripts/direct_prices.py --max-batches 80
-
-# 优先补齐指定游戏的版本、DLC、CDK 与历史，只处理这些游戏
-python scripts/refresh_prices.py --appids "386940,620"
-
-# 按需强制刷新历史或版本资料
-python scripts/refresh_prices.py --batch-size 3 --refresh-history --refresh-content
-
-# 验证并生成可双击预览
-python -m unittest discover -s tests -v
-node scripts/check_site.mjs
-python scripts/package_preview.py
-```
-
-目录脚本支持 `--output`、`--catalog`、`--pages`、`--page-size`、`--api-page-size` 和 `--delay`。本机可通过环境变量配置 `STEAM_WEB_API_KEY`，不要把密钥写进源文件或提交到仓库。
-
-`refresh_prices.py` 保留未轮到的游戏及其原报价时间；运行前不要删除 `prices.json` 或 `catalog-index.json`。如只需按人工目录采集核心游戏，也可运行 `python scripts/collect_prices.py`。重新载入网页只读取已发布快照，不会即时查询商家接口。
-
-## GitHub Pages 与自动任务
-
-仓库需要在 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。随后可在 Actions 手动运行以下工作流：
-
-| 工作流文件 / 名称 | 作用 |
-| --- | --- |
-| `pages.yml` / Deploy GitHub Pages | 页面代码变动后的检查与发布 |
-| `refresh-prices.yml` / Refresh prices and deploy | 每小时第 7、22、37、52 分钟更新完整报价及最多 80 批基础现价，再直接部署；手动运行可填写 `appids` 优先采集最多 10 款已在目录中的游戏 |
-| `sync-catalog.yml` / Sync game catalog and deploy | 每天 UTC 19:19，即北京时间次日 03:19，执行下一批目录同步，再提交并部署；支持手动运行 |
-
-可选官方目录密钥在 **Settings → Secrets and variables → Actions → New repository secret** 中添加，名称为 **`STEAM_WEB_API_KEY`**。不配置时走匿名公开搜索；其他常规匿名采集不依赖这项密钥。
-
-自动提交需要 `contents: write`，Pages 发布需要相应 Pages 权限，工作流已声明。三份工作流共用并发锁。采集工作流直接完成部署，不依赖 `GITHUB_TOKEN` 提交再次触发 `push` 工作流。
-
-定时任务只在默认分支执行，可能因 GitHub 排队、商家限流或网络限制而延迟。公开仓库长期无活动时，GitHub 可能停用计划任务；可在 Actions 重新启用。页面显示每条报价的实际检查时间；在线报价超过有效期时不再参与当前最低价，本地独立预览则明确保留为采集时快照。
-
 ## 文件说明
 
 | 文件 | 用途 |
 | --- | --- |
-| `dist/` | 发布到 Pages 的静态网页、明暗样式、脚本与 JSON |
-| `dist/data/catalog-index.json` | 自动同步的独立搜索目录、覆盖状态与分页游标 |
-| `dist/data/prices.json` | 已采价游戏、独立版本 / DLC 报价、历史及轮转进度 |
-| `dist/data/direct-prices.json` | 独立的 Steam 国区基础现价、覆盖状态、各记录时间与续采游标 |
-| `打开预览.html` / `启动预览.cmd` | 可双击的独立快照及启动入口 |
+| `dist/` | 发布到 Pages 的静态网页、样式、脚本与数据 |
+| `dist/data/catalog-index.json` | 紧凑 v2 搜索目录、覆盖状态与分页游标 |
+| `dist/data/price-manifest.json` | 64 个现价分片的清单、覆盖统计与检查时间 |
+| `dist/data/price-shards/price-NN.json` | 按 AppID 取模划分的全库现价分片 |
+| `dist/data/prices.json` | 已采集的版本、DLC、CDK 报价与历史 |
+| `打开预览.html` / `启动预览.cmd` | 内嵌全库目录、分片与详情的可双击快照 |
 | `data/catalog.json` | 核心游戏中文名称、别名和已核验的商品映射 |
 | `scripts/sync_catalog.py` | 公开搜索分页、可选官方目录全量 / 增量同步 |
-| `scripts/refresh_prices.py` | 核心游戏刷新与目录游戏轮转回填 |
-| `scripts/direct_prices.py` | 每批最多 100 个 AppID 的 Steam 基础现价采集、失败保留及断点接续 |
+| `scripts/direct_prices.py` | 全库现价分片采集、worker 划分、失败保留与断点接续 |
+| `scripts/price_format.py` | 分片紧凑格式、整数分币值与清单构建 |
+| `scripts/catalog_format.py` | 目录 v2 数组格式读写与 AppID 提取 |
+| `scripts/build_data.py` | 校验分片并重建 `price-manifest.json` |
+| `scripts/refresh_prices.py` | 详情轮换、版本 / DLC / CDK / 历史补全 |
 | `scripts/collect_prices.py` / `providers.py` | 商家采集、标准版匹配、报价归一化与异常处理 |
 | `scripts/editions.py` | 精确购买包、捆绑包、DLC 资料与独立报价 |
 | `scripts/price_history.py` | 小黑盒国区历史、日期归一化与缓存 |
 | `scripts/package_preview.py` / `serve.py` | 生成独立快照、本机 HTTP 预览 |
-| `tests/` / `scripts/check_site.mjs` | 采集逻辑、目录覆盖、数据与静态资源检查 |
-| `.github/workflows/` | 页面部署、现价刷新、目录同步三份工作流 |
+| `scripts/check_site.mjs` / `scripts/browser_check.mjs` | 数据契约与静态资源检查、无依赖 Chromium 交互 QA |
+| `tests/` | 目录、分片、采集、轮换与数据校验的 Python 测试 |
+| `.github/workflows/` | 页面部署、全库现价、详情轮换、目录同步四份工作流 |
 
 核心目录可继续手动补充中文别名和已验证的商家映射；未知映射留空，避免模糊标题把其他版本凑进比价。
 
 ## 参考
 
-[Steam 官方目录接口](https://partner.steamgames.com/doc/webapi/IStoreService)、[GitHub Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[GitHub Actions 定时任务说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)、[GITHUB_TOKEN 的触发限制](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)。
+[Steam 官方目录接口](https://partner.steamgames.com/doc/webapi/IStoreService)、[GitHub Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[GitHub Actions 定时任务说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
 
 商店与小黑盒的数据接口由各自平台运营，不是本项目保证长期可用的开放 API。接口结构或访问限制改变时，需要更新对应模块。

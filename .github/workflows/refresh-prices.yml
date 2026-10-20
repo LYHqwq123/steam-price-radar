@@ -1,79 +1,154 @@
-name: Refresh prices and deploy
+name: Refresh all Steam prices and deploy
 
 on:
   schedule:
-    # UTC: offset from the start of the hour to reduce peak-time queueing.
-    - cron: '7,22,37,52 * * * *'
+    # Every two hours. Eight workers refresh the whole directory concurrently.
+    - cron: '17 */2 * * *'
   workflow_dispatch:
     inputs:
-      appids:
-        description: '优先采集指定 Steam AppID（最多 10 个，逗号或空格分隔）；留空执行常规更新'
+      save_baseline:
+        description: '把本次全量分片写入 Git 基线（平时每周自动保存一次）'
         required: false
-        type: string
+        default: true
+        type: boolean
 
 permissions:
   contents: read
+  actions: read
 
+# All data-writing and deploying workflows share this lock so a push can never
+# silently discard another run's freshly collected prices.
 concurrency:
   group: steam-price-radar-pages
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  refresh:
+  collect:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    permissions:
-      contents: write
-      pages: read
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - name: Checkout latest catalog and saved history
+      - name: Checkout current directory and price shards
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.13'
+      - name: Restore latest successful price observations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: bash scripts/restore_price_snapshot.sh
+      - name: Collect one eighth of the catalog
+        run: |
+          python scripts/direct_prices.py \
+            --worker-index ${{ matrix.worker }} \
+            --worker-count 8 \
+            --shard-count 64 \
+            --delay 1.0 \
+            --max-seconds 1500
+      - name: Stage shards owned by this worker
+        if: always()
+        run: |
+          mkdir -p .worker-output
+          for offset in 0 1 2 3 4 5 6 7; do
+            index=$(( ${{ matrix.worker }} * 8 + offset ))
+            file=$(printf 'dist/data/price-shards/price-%02d.json' "$index")
+            if [ -f "$file" ]; then cp "$file" .worker-output/; fi
+          done
+          ls -l .worker-output
+      - name: Upload shards
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-shards-${{ matrix.worker }}
+          path: .worker-output/*.json
+          if-no-files-found: warn
+          retention-days: 3
+
+  publish:
+    needs: collect
+    if: always() && needs.collect.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pages: read
+      actions: read
+    steps:
+      - name: Checkout latest catalog and baseline shards
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Restore latest successful price observations
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: bash scripts/restore_price_snapshot.sh
+      - name: Download all worker shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: price-shards-*
+          merge-multiple: true
+          path: dist/data/price-shards
       - name: Verify price matching safeguards
         run: python -m unittest discover -s tests -v
-      - name: Collect current prices
-        env:
-          REQUESTED_APPIDS: ${{ inputs.appids || '' }}
-        run: |
-          if [ -n "$REQUESTED_APPIDS" ]; then
-            python scripts/refresh_prices.py --appids "$REQUESTED_APPIDS"
-          else
-            python scripts/refresh_prices.py --batch-size 20
-          fi
-      - name: Collect Steam current prices across the directory
-        run: python scripts/direct_prices.py --max-batches 80 --delay 0.7
+      - name: Build the browser price manifest
+        run: python scripts/build_data.py
       - name: Validate prices and website
         run: node scripts/check_site.mjs
-      - name: Save changed prices
+      - name: Persist the merged snapshot for the next run
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-steam-price-shards
+          path: dist/data/price-shards/*.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Decide whether to commit the weekly shard baseline
+        id: baseline
+        if: github.event_name == 'workflow_dispatch' && inputs.save_baseline || github.event_name == 'schedule'
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$(date -u +%u)" = "7" ] && [ "$(date -u +%H)" = "00" ]; }; then
+            echo 'save=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'save=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save weekly Git baseline
+        if: steps.baseline.outputs.save == 'true'
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add -- dist/data/prices.json dist/data/direct-prices.json
+          git add -- dist/data/price-shards dist/data/price-manifest.json
           if git diff --cached --quiet; then
-            echo 'No price data changed.'
+            echo 'No baseline data changed.'
           else
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'data: refresh game prices'
+            git commit -m 'data: save weekly price baseline'
             git push origin "HEAD:$DEFAULT_BRANCH"
           fi
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-      - name: Upload refreshed website
+      - name: Upload freshly collected website
         uses: actions/upload-pages-artifact@v4
         with:
           path: dist
 
-  # A push made with GITHUB_TOKEN does not trigger pages.yml. Deploy here directly.
   deploy:
-    needs: refresh
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -82,6 +157,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy refreshed website
+      - name: Deploy fresh full-library prices
         id: deployment
         uses: actions/deploy-pages@v4

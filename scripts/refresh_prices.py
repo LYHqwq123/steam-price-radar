@@ -1,8 +1,9 @@
-"""Refresh core games and a small rotating batch without dropping old prices.
+"""Refresh detailed game comparisons without dropping old prices.
 
-The Steam directory is a search index, not a promise that all games were priced
-in this run. Each quote keeps its own observed timestamp. No browser requests,
-catalog-wide immediate price scan, or fabricated price estimates are used.
+Whole-library Steam current prices live in sharded snapshots produced by
+``direct_prices.py``. This script enriches a rotating batch every fifteen minutes with
+versions, DLC, CDK quotes and history. Each quote keeps its own observed
+timestamp; no fabricated price estimates are used.
 """
 from __future__ import annotations
 
@@ -18,9 +19,11 @@ from datetime import datetime
 from pathlib import Path
 
 try:
+    from .catalog_format import unpack_games
     from .collect_prices import collect
     from .providers import SOURCES, now_iso
 except ImportError:
+    from catalog_format import unpack_games
     from collect_prices import collect
     from providers import SOURCES, now_iso
 
@@ -70,6 +73,17 @@ def normalize_catalog(catalog):
     """Only normalize directory metadata; never infer verified shop mappings."""
     output, seen = [], set()
     for row in records(catalog):
+        if isinstance(row, list):
+            # Compact schema v2 directories carry names only.
+            converted = unpack_games([row])
+            if not converted:
+                continue
+            value = converted[0]
+            value["nameEn"] = value.get("nameEn") or value["name"]
+            if value["appid"] not in seen:
+                output.append(value)
+                seen.add(value["appid"])
+            continue
         if not isinstance(row, dict):
             continue
         appid = app_id(row.get("appid"))

@@ -1,8 +1,9 @@
-"""Synchronize a searchable Steam game directory without collecting prices.
+"""Synchronize the full Steam game directory without collecting prices.
 
 With STEAM_WEB_API_KEY, use the official store API and its modification cursor.
-Without a key, gradually traverse the public Chinese store search. The latter
-only covers publicly searchable CN games and never claims the full Steam library.
+Without a key, traverse the public Chinese store search page by page. A single
+long run can walk the complete public CN result set (about 184k games); an
+interrupted run keeps its cursor and resumes without skipping failed pages.
 """
 from __future__ import annotations
 
@@ -18,6 +19,11 @@ import sys
 import time
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
+
+try:
+    from .catalog_format import SCHEMA_VERSION, pack_games, unpack_games, write_catalog
+except ImportError:
+    from catalog_format import SCHEMA_VERSION, pack_games, unpack_games, write_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 SEARCH_URL = "https://store.steampowered.com/search/results/"
@@ -170,23 +176,23 @@ def request_page(client, url, params, *, attempts=3, delay=0.7, sleep=time.sleep
 
 
 def _result(previous, curated, incoming, now, source, state, complete, total, successes, failed):
-    games = merge_games(previous.get("games", []), incoming, curated)
+    games = pack_games(merge_games(previous.get("games", []), incoming, curated))
     if not successes:
         if previous.get("games"):
             result = copy.deepcopy(previous)
-            result.update(schemaVersion=1, games=games, gameCount=len(games), status="stale", lastAttemptAt=now,
+            result.update(schemaVersion=SCHEMA_VERSION, games=games, gameCount=len(games), status="stale", lastAttemptAt=now,
                           note="本轮目录同步失败，保留上次目录、覆盖状态与同步游标。")
             return result
-        return {"schemaVersion": 1, "generatedAt": now, "lastAttemptAt": now, "source": source,
+        return {"schemaVersion": SCHEMA_VERSION, "generatedAt": now, "lastAttemptAt": now, "source": source,
                 "sourceUrl": API_DOC if source == API_SOURCE else SEARCH_URL, "status": "error", "complete": False,
                 "scope": "仅本地已配置游戏，在线目录尚未取得", "note": "目录接口暂不可用，未生成或虚构完整目录。",
                 "games": games, "gameCount": len(games), "syncState": state}
     public = source == SEARCH_SOURCE
     scope = "中国大陆 Steam 公开搜索可见的游戏本体，不含受限条目、DLC、软件或捆绑包" if public else "Steam 商店 API 返回的游戏本体，不含 DLC、软件、视频或硬件"
-    note = ("已连续遍历本次公开搜索结果；这不等于 Steam 全库。" if complete else "公开目录正在分批补全；已保存游标，下轮继续，当前并非完整游戏库。") if public else ("官方商店目录同步完成，后续按修改时间增量同步；名称可能未汉化。" if complete else "官方目录正在分页同步；已有目录保留，当前遍历尚未完成。")
+    note = ("已完整遍历本次公开搜索结果，可按名称或 AppID 搜索全库目录。" if complete else "公开目录正在分批补全；已保存游标，下轮继续，当前并非完整游戏库。") if public else ("官方商店目录同步完成，后续按修改时间增量同步；名称可能未汉化。" if complete else "官方目录正在分页同步；已有目录保留，当前遍历尚未完成。")
     if failed:
         note += "本轮有页面读取失败，停在最后成功页之后，未跳过失败页。"
-    result = {"schemaVersion": 1, "generatedAt": now, "source": source, "sourceUrl": SEARCH_URL if public else API_DOC,
+    result = {"schemaVersion": SCHEMA_VERSION, "generatedAt": now, "source": source, "sourceUrl": SEARCH_URL if public else API_DOC,
               "status": "ok" if complete and not failed else "partial", "complete": bool(complete and not failed),
               "scope": scope, "note": note, "games": games, "gameCount": len(games), "syncState": state}
     if total is not None:
@@ -205,6 +211,7 @@ def sync_search(previous, curated, client, *, pages=20, page_size=100, delay=0.7
     if old_state.get("lastCompletedAt"):
         state["lastCompletedAt"] = old_state["lastCompletedAt"]
     incoming, total, successes, failed, complete = [], None, 0, False, False
+    page_signatures = set()
     count = max(1, min(int(page_size), 100))
     for page in range(max(1, int(pages))):
         try:
@@ -214,6 +221,11 @@ def sync_search(previous, curated, client, *, pages=20, page_size=100, delay=0.7
             games, total, rows = parse_search_page(payload)
             if start < total and not rows and not games:
                 raise ValueError("empty page before reported end")
+            signature = tuple(game["appid"] for game in games)
+            if signature and signature in page_signatures:
+                raise ValueError("Steam repeated an earlier result page; cursor did not advance")
+            if signature:
+                page_signatures.add(signature)
         except Exception:
             failed = True
             break
@@ -286,6 +298,9 @@ def sync_api(previous, curated, client, key, *, pages=20, page_size=10000, delay
 
 def synchronize(previous=None, curated=None, *, client=None, key=None, pages=20, page_size=100, api_page_size=10000, delay=0.7, now=None, sleep=time.sleep):
     previous, curated, client = previous or {}, curated or [], client or CatalogClient()
+    if isinstance(previous, dict):
+        # Accept both schema v1 object rows and schema v2 compact rows.
+        previous = {**previous, "games": unpack_games(previous)}
     if key:
         return sync_api(previous, curated, client, key, pages=pages, page_size=api_page_size, delay=delay, now=now, sleep=sleep)
     return sync_search(previous, curated, client, pages=pages, page_size=page_size, delay=delay, now=now, sleep=sleep)
@@ -303,7 +318,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/data/catalog-index.json")
     parser.add_argument("--catalog", type=Path, default=ROOT / "data/catalog.json")
-    parser.add_argument("--pages", type=int, default=20)
+    parser.add_argument("--pages", type=int, default=2500, help="maximum public search pages per run")
     parser.add_argument("--page-size", type=int, default=100, help="public search page size, maximum 100")
     parser.add_argument("--api-page-size", type=int, default=10000, help="official API page size, maximum 50000")
     parser.add_argument("--delay", type=float, default=0.7)
@@ -317,10 +332,7 @@ def main(argv=None):
         previous = {}
     result = synchronize(previous, curated, key=os.environ.get("STEAM_WEB_API_KEY", "").strip(), pages=args.pages,
                          page_size=args.page_size, api_page_size=args.api_page_size, delay=args.delay)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = args.output.with_suffix(args.output.suffix + ".tmp")
-    temporary.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-    temporary.replace(args.output)
+    write_catalog(args.output, result)
     # Only counts and controlled labels are printed; keys and exception URLs are not.
     print(f"Steam directory: {result['gameCount']} games; status={result['status']}; complete={str(result['complete']).lower()}")
     return 1 if result["status"] == "error" else 0

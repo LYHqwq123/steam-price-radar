@@ -1,10 +1,16 @@
-name: Sync game catalog and deploy
+name: Sync full Steam catalog
 
 on:
   schedule:
-    # One catalog batch per day; an API key enables the official full directory.
-    - cron: '19 19 * * *'
+    # Weekly; one uninterrupted run walks the complete public CN store result set.
+    - cron: '23 18 * * 0'
   workflow_dispatch:
+    inputs:
+      pages:
+        description: '本次最多遍历的搜索页数（每页 100 款）'
+        required: false
+        default: '2500'
+        type: string
 
 permissions:
   contents: read
@@ -12,61 +18,49 @@ permissions:
 concurrency:
   group: steam-price-radar-pages
   cancel-in-progress: false
+  queue: max
 
 jobs:
   sync:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
     permissions:
       contents: write
-      pages: read
+      actions: write
     steps:
-      - name: Checkout latest directory
+      - name: Checkout saved directory cursor
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Verify catalog and price matching
         run: python -m unittest discover -s tests -v
-      - name: Sync next directory batch
+      - name: Walk the complete public Steam directory
         env:
           STEAM_WEB_API_KEY: ${{ secrets.STEAM_WEB_API_KEY }}
-        run: python scripts/sync_catalog.py --pages 30
+          PAGES: ${{ inputs.pages || '2500' }}
+        run: python scripts/sync_catalog.py --pages "$PAGES" --delay 0.6
+      - name: Rebuild price coverage for the expanded directory
+        run: python scripts/build_data.py
       - name: Validate website and catalog
         run: node scripts/check_site.mjs
       - name: Save updated directory
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add -- dist/data/catalog-index.json
+          git add -- dist/data/catalog-index.json dist/data/price-manifest.json
           if ! git diff --cached --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'data: sync Steam game directory'
+            git commit -m 'data: sync full Steam catalog'
             git push origin "HEAD:$DEFAULT_BRANCH"
           fi
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-      - name: Upload website
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: dist
-
-  deploy:
-    needs: sync
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy updated catalog
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Queue full-library price collection and deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run refresh-prices.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" -f save_baseline=true

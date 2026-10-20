@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import sync_catalog as catalog
+from scripts.catalog_format import unpack_games
 
 NOW = "2026-10-17T12:00:00Z"
 
@@ -81,12 +82,17 @@ class CatalogSyncTests(unittest.TestCase):
         first["syncState"]["contiguousFromStart"] = False
         self.assertFalse(catalog.synchronize(first, client=FakeClient(search_page([30], 3)), pages=1, page_size=2, now=NOW, delay=0)["complete"])
 
+    def test_catalog_is_written_as_compact_v2_rows(self):
+        result = catalog.synchronize(client=FakeClient(search_page([10], 1)), now=NOW, delay=0)
+        self.assertEqual(result["schemaVersion"], 2)
+        self.assertEqual(result["games"], [[10, "游戏10"]])
+
     def test_search_failure_after_success_retains_rows_and_retries_failed_page_next_time(self):
         previous = {"games": [{"appid": 1, "name": "Already here"}]}
         client = FakeClient(search_page([10, 20], 100), RuntimeError("offline"), RuntimeError("offline"), RuntimeError("offline"))
         result = catalog.synchronize(previous, client=client, pages=2, page_size=2, now=NOW, delay=0)
         self.assertEqual(result["syncState"]["nextStart"], 2)
-        self.assertEqual([g["appid"] for g in result["games"]], [1, 10, 20])
+        self.assertEqual([g["appid"] for g in unpack_games(result)], [1, 10, 20])
         self.assertEqual(result["status"], "partial")
         self.assertFalse(result["complete"])
         self.assertEqual(len(client.calls), 4)
@@ -104,6 +110,15 @@ class CatalogSyncTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["complete"])
         self.assertEqual(result["syncState"]["nextStart"], 0)
+
+    def test_repeated_page_stops_without_claiming_full_coverage_or_skipping_cursor(self):
+        result = catalog.synchronize(client=FakeClient(search_page([10, 20], 4),
+                                    search_page([10, 20], 4)),
+                                     pages=2, page_size=2, now=NOW, delay=0)
+        self.assertEqual(result["gameCount"], 2)
+        self.assertEqual(result["syncState"]["nextStart"], 2)
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(result["complete"])
 
     def test_official_api_uses_last_appid_and_game_only_flags(self):
         client = FakeClient(api_page([10, 20], True), api_page([30], False))

@@ -127,6 +127,15 @@ class RotationTests(unittest.TestCase):
                         collector=lambda *a, **k: {"games": [current]})
         self.assertEqual(value["games"][0]["history"][0]["steam"], 10)
 
+    def test_compact_v2_directory_rows_are_supported(self):
+        compact = {"schemaVersion": 2, "games": [[1, "核心", "Core", ["core"]], [2, "游戏 2"]]}
+        self.assertEqual(normalize_catalog(compact), [
+            {"appid": 1, "name": "核心", "nameEn": "Core", "aliases": ["core"]},
+            {"appid": 2, "name": "游戏 2", "nameEn": "游戏 2", "aliases": []}])
+        value = refresh(CORE, compact, collector=fake_collect, scheduled_at=T1)
+        self.assertEqual(value["rotation"]["catalogCount"], 2)
+        self.assertEqual({row["appid"] for row in value["games"]}, {1, 2})
+
     def test_negative_or_boolean_batch_rejected(self):
         for batch in (-1, True, 1.5):
             with self.assertRaises(ValueError):
